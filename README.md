@@ -11,8 +11,8 @@ Discovers multiple Muse EEG LSL streams, computes `enthea.muse.features/v1` fram
 | Is | Is not |
 |----|--------|
 | App-facing feature broker (router for sessions) | Muse BLE / Windows streaming app (the radio) |
-| LSL **consumer** (source-agnostic) | Official BlueMuse or ENTHEA product |
-| Features-first privacy posture | Raw EEG server by default |
+| LSL **consumer** (Muse publisher-agnostic: BlueMuse, muselsl, or peers) | Official BlueMuse or ENTHEA product |
+| Features-first, local-first privacy posture | Raw EEG server by default |
 
 ## Quick start
 
@@ -56,6 +56,8 @@ Often fed by [BlueMuse](https://github.com/kowalej/BlueMuse) (or muselsl / any M
 - **This package** is MIT-licensed (see `LICENSE`).
 
 ## Configuration highlights
+
+Local-first by default: loopback bind, no phone-home (see [PRIVACY.md](PRIVACY.md)). LAN bind requires an explicit flag plus access token.
 
 | Flag | Default | Meaning |
 |------|---------|---------|

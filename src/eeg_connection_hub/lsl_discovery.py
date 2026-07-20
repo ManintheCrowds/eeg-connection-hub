@@ -1,6 +1,6 @@
 # PURPOSE: Detect Muse EEG LSL streams and discover multiple inputs.
 # DEPENDENCIES: lsl_metadata
-"""LSL stream discovery for BlueMuse-published Muse EEG."""
+"""LSL stream discovery for Muse EEG (any upstream LSL publisher)."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from eeg_connection_hub.lsl_metadata import (
 
 
 def is_muse_eeg_stream(stream_info: object) -> bool:
-    """Return True when stream metadata looks like Muse EEG from BlueMuse."""
+    """Return True when stream metadata looks like Muse EEG (publisher-agnostic)."""
     name = stream_name(stream_info).lower()
     stype = stream_type(stream_info).lower()
     return "muse" in name and ("eeg" in name or "eeg" in stype)
