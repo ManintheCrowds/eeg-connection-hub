@@ -1,8 +1,18 @@
 # EEG Connection Hub (beta)
 
-LAN-first broker that discovers **multiple** BlueMuse-published Muse LSL EEG streams, computes derived feature frames compatible with `enthea.muse.features/v1`, and fans out to **multiple** WebSocket subscribers with stable stream IDs and pseudonymous sessions.
+**LAN-first multi-stream EEG feature broker — LSL in, derived features out, multi-app WebSocket fan-out.**
+
+Discovers multiple Muse EEG LSL streams, computes `enthea.muse.features/v1` frames, and fans them out to many WebSocket subscribers with stable `stream_id` values and pseudonymous sessions.
 
 **Public beta:** [ManintheCrowds/eeg-connection-hub](https://github.com/ManintheCrowds/eeg-connection-hub). Formal GitHub Release still waiting-human (**EEG-HUB-2**). Live Muse hardware validation has not been performed.
+
+## What this is / is not
+
+| Is | Is not |
+|----|--------|
+| App-facing feature broker (router for sessions) | Muse BLE / Windows streaming app (the radio) |
+| LSL **consumer** (source-agnostic) | Official BlueMuse or ENTHEA product |
+| Features-first privacy posture | Raw EEG server by default |
 
 ## Quick start
 
@@ -36,11 +46,12 @@ python examples/enthea_consumer.py --uri ws://127.0.0.1:8765
 | Default bind | Loopback | Loopback |
 | Raw EEG | Never emitted | Opt-in, loopback-only |
 
-BlueMuse can publish **multiple** Muse headsets on one LAN; the existing bridge selects at most one and raises if ambiguous. This hub generalizes that path.
+An LSL publisher can expose multiple Muse headsets on one LAN; the existing bridge selects at most one and raises if ambiguous. This hub generalizes that path.
 
 ## Ecosystem attribution (not a fork)
 
-- **Consumes** LSL streams typically published by [BlueMuse](https://github.com/kowalej/BlueMuse) (GPL-3.0). This hub does **not** bundle or fork BlueMuse.
+Often fed by [BlueMuse](https://github.com/kowalej/BlueMuse) (or muselsl / any Muse LSL publisher); **not a BlueMuse fork.** This hub does not bundle BlueMuse source (GPL-3.0).
+
 - Feature schema aligns with the ENTHEA Muse seam (`enthea.muse.features/v1`) used in [ENTHEA](https://github.com/elder-plinius/ENTHEA) (AGPL-3.0). This hub does **not** copy ENTHEA source; see `examples/enthea_consumer.py` for a minimal consumer.
 - **This package** is MIT-licensed (see `LICENSE`).
 
@@ -64,9 +75,3 @@ BlueMuse can publish **multiple** Muse headsets on one LAN; the existing bridge 
 - [PRIVACY.md](PRIVACY.md)
 - [SECURITY.md](SECURITY.md)
 - [CONTRIBUTING.md](CONTRIBUTING.md)
-
-## Proposed GitHub metadata (for later approval)
-
-**Description:** LAN-first multi-stream Muse EEG feature broker — BlueMuse LSL in, ENTHEA-compatible WebSocket out.
-
-**Topics:** `eeg`, `muse-headband`, `lsl`, `lab-streaming-layer`, `websocket`, `bluemuse`, `neurofeedback`, `maninthecrowds`
