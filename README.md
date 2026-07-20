@@ -2,7 +2,7 @@
 
 LAN-first broker that discovers **multiple** BlueMuse-published Muse LSL EEG streams, computes derived feature frames compatible with `enthea.muse.features/v1`, and fans out to **multiple** WebSocket subscribers with stable stream IDs and pseudonymous sessions.
 
-**Local package only** — this tree is not published to GitHub by default.
+**Public beta:** [ManintheCrowds/eeg-connection-hub](https://github.com/ManintheCrowds/eeg-connection-hub). Formal GitHub Release still waiting-human (**EEG-HUB-2**). Live Muse hardware validation has not been performed.
 
 ## Quick start
 
