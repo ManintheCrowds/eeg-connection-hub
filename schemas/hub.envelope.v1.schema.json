@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "hub.envelope.v1.schema.json",
+  "title": "EEG Connection Hub envelope v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "hub_schema",
+    "stream_id",
+    "session_id",
+    "session_label",
+    "features"
+  ],
+  "properties": {
+    "hub_schema": {
+      "const": "eeg-connection-hub.envelope/v1"
+    },
+    "stream_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[a-z0-9][a-z0-9-]*$"
+    },
+    "session_id": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 32
+    },
+    "session_label": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "features": {
+      "$ref": "enthea.muse.features.v1.schema.json"
+    }
+  }
+}

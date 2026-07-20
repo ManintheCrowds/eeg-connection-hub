@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "enthea.muse.features.v1.schema.json",
+  "title": "ENTHEA Muse feature frame v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "ts",
+    "source",
+    "artifact",
+    "drive_safe",
+    "quality",
+    "bands",
+    "controls"
+  ],
+  "properties": {
+    "schema": {
+      "const": "enthea.muse.features/v1"
+    },
+    "ts": {
+      "type": "number",
+      "minimum": 0
+    },
+    "source": {
+      "enum": ["lsl-live", "synth"]
+    },
+    "artifact": {
+      "type": "boolean"
+    },
+    "drive_safe": {
+      "type": "boolean"
+    },
+    "quality": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "sample_count", "required_samples", "message"],
+      "properties": {
+        "status": {
+          "enum": ["safe", "empty", "warming", "artifact", "error"]
+        },
+        "sample_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "required_samples": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "message": {
+          "type": "string",
+          "maxLength": 160
+        }
+      }
+    },
+    "bands": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["delta", "theta", "alpha", "beta"],
+      "properties": {
+        "delta": { "type": "number", "minimum": 0, "maximum": 1 },
+        "theta": { "type": "number", "minimum": 0, "maximum": 1 },
+        "alpha": { "type": "number", "minimum": 0, "maximum": 1 },
+        "beta": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "controls": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dose", "speed", "cplx", "pulse"],
+      "properties": {
+        "dose": { "type": "number", "minimum": 0, "maximum": 1 },
+        "speed": { "type": "number", "minimum": 0, "maximum": 3 },
+        "cplx": { "type": "number", "minimum": 0, "maximum": 1 },
+        "pulse": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "raw_eeg": {
+      "type": "array",
+      "items": {
+        "type": "array",
+        "minItems": 4,
+        "maxItems": 4,
+        "items": { "type": "number" }
+      },
+      "maxItems": 8
+    }
+  }
+}

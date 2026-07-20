@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "eeg-connection-hub"
+version = "0.1.0-beta"
+description = "LAN-first multi-stream Muse EEG feature broker for ManintheCrowds"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+authors = [{ name = "ManintheCrowds" }]
+keywords = ["eeg", "muse", "lsl", "websocket", "bluemuse", "enthea"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Medical Science Apps.",
+]
+dependencies = [
+    "numpy>=1.24",
+    "websockets>=12.0",
+    "jsonschema>=4.20",
+]
+
+[project.optional-dependencies]
+lsl = ["pylsl>=1.16"]
+dev = ["pytest>=7.4", "pytest-asyncio>=0.23", "jsonschema>=4.20"]
+
+[project.scripts]
+eeg-hub = "eeg_connection_hub.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true

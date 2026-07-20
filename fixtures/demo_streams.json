@@ -1,0 +1,17 @@
+{
+  "demo_streams": [
+    {
+      "stream_id": "muse-demo-headset-1",
+      "lsl_name": "MuseS-DEMO-01",
+      "source_id": "demo-headset-1",
+      "session_label": "participant-001"
+    },
+    {
+      "stream_id": "muse-demo-headset-2",
+      "lsl_name": "MuseS-DEMO-02",
+      "source_id": "demo-headset-2",
+      "session_label": "participant-002"
+    }
+  ],
+  "notes": "Synthetic fixture for local dry-run; not captured from live hardware."
+}
