@@ -49,6 +49,7 @@ class SyntheticInlet:
     _sample_index: int = 0
     _stopped: bool = False
     _stale_mode: bool = False
+    _last_emit_mono: float = 0.0
 
     def pull_chunk(
         self,
@@ -57,6 +58,11 @@ class SyntheticInlet:
     ) -> tuple[list[list[float]], list[float]]:
         if self._stopped or self._stale_mode:
             return [], []
+        # Mimic a drained inlet: empty until a short accrual window passes.
+        mono = time.monotonic()
+        if self._last_emit_mono and (mono - self._last_emit_mono) < 0.05:
+            return [], []
+        self._last_emit_mono = mono
         sfreq = stream_sample_rate(self.stream_info)
         n = min(max_samples, 32)
         rows: list[list[float]] = []
