@@ -8,15 +8,9 @@ import math
 import time
 from dataclasses import dataclass, field
 
-import numpy as np
-
 from eeg_connection_hub.features import EEG_CHANNELS
 from eeg_connection_hub.lsl_metadata import (
-    stream_channel_count,
-    stream_name,
     stream_sample_rate,
-    stream_source_id,
-    stream_type,
 )
 
 

@@ -1,0 +1,11 @@
+{
+  "date": "2026-11-13",
+  "branch": "raise/friday2-wheel-ci",
+  "base": "master b21a2ce",
+  "data": "synthetic only; no hardware, no recordings",
+  "pytest": {"py3.10": "19 passed", "py3.11": "19 passed", "py3.12": "19 passed", "py3.13": "19 passed", "flags": "-W error::DeprecationWarning (RefResolver gone)"},
+  "ruff": "All checks passed (E,F,I,UP; line-length 110)",
+  "wheel": "built eeg_connection_hub-0.1.0b0-py3-none-any.whl with schema_files/*.json; clean venv install validated a synthetic envelope from /tmp (outside repo)",
+  "gitleaks": "v8.21.2 git scan: no leaks found",
+  "baseline": "Nov 1 audit on master: wheel omitted schemas/ -> FileNotFoundError on first validation"
+}

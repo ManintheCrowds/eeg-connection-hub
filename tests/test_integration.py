@@ -4,8 +4,8 @@ from __future__ import annotations
 import asyncio
 import json
 import socket
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
 
 import pytest
 
@@ -193,10 +193,12 @@ async def test_raw_eeg_opt_in_loopback() -> None:
     hub = EEGConnectionHub(config)
     await hub._init_synthetic_workers()
     worker = hub.workers["muse-demo-headset-1"]
+    import time
+
+    import numpy as np
+
     from eeg_connection_hub.stream_mapping import build_channel_mapping
     from eeg_connection_hub.synthetic import SyntheticStreamInfo
-    import numpy as np
-    import time
 
     info = SyntheticStreamInfo(name="MuseS-DEMO-01", source_id="demo-headset-1")
     worker.config = build_channel_mapping(info)
