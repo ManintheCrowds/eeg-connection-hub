@@ -11,8 +11,9 @@ import logging
 import math
 import time
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 import numpy as np
@@ -400,7 +401,7 @@ class EEGConnectionHub:
             if not validate_token(self.config, token):
                 body = json.dumps({"error": "unauthorized"}).encode("utf-8")
                 writer.write(b"HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\n")
-                writer.write(f"Content-Length: {len(body)}\r\n\r\n".encode("utf-8"))
+                writer.write(f"Content-Length: {len(body)}\r\n\r\n".encode())
                 writer.write(body)
                 await writer.drain()
                 writer.close()
@@ -409,7 +410,7 @@ class EEGConnectionHub:
             if method != "GET":
                 body = json.dumps({"error": "method not allowed"}).encode("utf-8")
                 writer.write(b"HTTP/1.1 405 Method Not Allowed\r\nContent-Type: application/json\r\n")
-                writer.write(f"Content-Length: {len(body)}\r\n\r\n".encode("utf-8"))
+                writer.write(f"Content-Length: {len(body)}\r\n\r\n".encode())
                 writer.write(body)
                 await writer.drain()
                 writer.close()
@@ -424,7 +425,7 @@ class EEGConnectionHub:
                 payload = {"error": "not found"}
                 body = json.dumps(payload).encode("utf-8")
                 writer.write(b"HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\n")
-                writer.write(f"Content-Length: {len(body)}\r\n\r\n".encode("utf-8"))
+                writer.write(f"Content-Length: {len(body)}\r\n\r\n".encode())
                 writer.write(body)
                 await writer.drain()
                 writer.close()
@@ -432,7 +433,7 @@ class EEGConnectionHub:
 
             body = json.dumps(payload).encode("utf-8")
             writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n")
-            writer.write(f"Content-Length: {len(body)}\r\n\r\n".encode("utf-8"))
+            writer.write(f"Content-Length: {len(body)}\r\n\r\n".encode())
             writer.write(body)
             await writer.drain()
         finally:

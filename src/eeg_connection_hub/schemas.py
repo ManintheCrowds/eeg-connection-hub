@@ -1,17 +1,25 @@
 # PURPOSE: JSON Schema validation for enthea features and hub envelope.
-# DEPENDENCIES: jsonschema, pathlib
-"""Protocol schema loading and validation."""
+# DEPENDENCIES: jsonschema, referencing, importlib.resources
+"""Protocol schema loading and validation.
+
+Schemas ship inside the package (``eeg_connection_hub/schema_files``) so a
+normal, non-editable wheel install can validate frames.
+"""
 
 from __future__ import annotations
 
 import json
 from functools import lru_cache
-from pathlib import Path
+from importlib.resources import files
 from typing import Any, TypedDict
 
 import jsonschema
+from referencing import Registry, Resource
+from referencing.jsonschema import DRAFT202012
 
-SCHEMA_DIR = Path(__file__).resolve().parent.parent.parent / "schemas"
+SCHEMA_DIR = files("eeg_connection_hub") / "schema_files"
+FEATURES_SCHEMA = "enthea.muse.features.v1.schema.json"
+ENVELOPE_SCHEMA = "hub.envelope.v1.schema.json"
 
 
 class QualityDict(TypedDict):
@@ -51,27 +59,28 @@ def load_schema(name: str) -> dict[str, Any]:
     return data
 
 
+@lru_cache(maxsize=1)
+def _registry() -> Registry:
+    """Registry of bundled schemas keyed by ``$id`` (replaces RefResolver)."""
+    resources = [
+        (name, Resource.from_contents(load_schema(name), default_specification=DRAFT202012))
+        for name in (FEATURES_SCHEMA, ENVELOPE_SCHEMA)
+    ]
+    return Registry().with_resources(resources)
+
+
 def _validator_for(name: str) -> jsonschema.Draft202012Validator:
-    schema = load_schema(name)
-    if name == "hub.envelope.v1.schema.json":
-        store = {
-            "enthea.muse.features.v1.schema.json": load_schema(
-                "enthea.muse.features.v1.schema.json"
-            ),
-        }
-        resolver = jsonschema.RefResolver.from_schema(schema, store=store)
-        return jsonschema.Draft202012Validator(schema, resolver=resolver)
-    return jsonschema.Draft202012Validator(schema)
+    return jsonschema.Draft202012Validator(load_schema(name), registry=_registry())
 
 
 def validate_features(frame: dict[str, Any], *, allow_raw: bool = False) -> None:
     if not allow_raw and "raw_eeg" in frame:
         raise jsonschema.ValidationError("raw_eeg not permitted in default mode")
-    _validator_for("enthea.muse.features.v1.schema.json").validate(frame)
+    _validator_for(FEATURES_SCHEMA).validate(frame)
 
 
 def validate_envelope(envelope: dict[str, Any], *, allow_raw: bool = False) -> None:
-    _validator_for("hub.envelope.v1.schema.json").validate(envelope)
+    _validator_for(ENVELOPE_SCHEMA).validate(envelope)
     validate_features(envelope["features"], allow_raw=allow_raw)
 
 
