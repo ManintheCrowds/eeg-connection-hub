@@ -31,7 +31,7 @@ class HubConfig:
             object.__setattr__(self, "access_token", secrets.token_urlsafe(32))
         if self.host not in ("127.0.0.1", "localhost", "0.0.0.0") and not self.allow_lan:
             raise ValueError("non-loopback bind requires allow_lan=True")
-        if self.enable_raw_eeg and not self.host in ("127.0.0.1", "localhost"):
+        if self.enable_raw_eeg and self.host not in ("127.0.0.1", "localhost"):
             raise ValueError("raw EEG export is loopback-only")
         if self.feature_hz <= 0:
             raise ValueError("feature_hz must be positive")

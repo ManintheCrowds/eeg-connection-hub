@@ -1,7 +1,6 @@
 # PURPOSE: Unit tests for feature math and schema validation.
 from __future__ import annotations
 
-import json
 import math
 import unittest
 
@@ -9,13 +8,17 @@ import jsonschema
 import numpy as np
 
 from eeg_connection_hub.features import (
-    EEG_CHANNELS,
     features_from_buffer,
     synth_features,
     warming_features,
 )
 from eeg_connection_hub.lsl_discovery import discover_muse_eeg_streams, is_muse_eeg_stream
-from eeg_connection_hub.schemas import build_envelope, load_schema, validate_envelope, validate_features
+from eeg_connection_hub.schemas import (
+    build_envelope,
+    load_schema,
+    validate_envelope,
+    validate_features,
+)
 from eeg_connection_hub.stream_mapping import build_channel_mapping, validate_lsl_chunk_timestamps
 from eeg_connection_hub.synthetic import SyntheticStreamInfo
 

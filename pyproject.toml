@@ -22,11 +22,12 @@ dependencies = [
     "numpy>=1.24",
     "websockets>=12.0",
     "jsonschema>=4.20",
+    "referencing>=0.31",
 ]
 
 [project.optional-dependencies]
 lsl = ["pylsl>=1.16"]
-dev = ["pytest>=7.4", "pytest-asyncio>=0.23", "jsonschema>=4.20"]
+dev = ["pytest>=7.4", "pytest-asyncio>=0.23", "jsonschema>=4.20", "ruff>=0.6", "build>=1.0"]
 
 [project.scripts]
 eeg-hub = "eeg_connection_hub.cli:main"
@@ -34,8 +35,12 @@ eeg-hub = "eeg_connection_hub.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+eeg_connection_hub = ["schema_files/*.json"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 pythonpath = ["src"]
 
@@ -44,3 +49,11 @@ python_version = "3.10"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
+
+[tool.ruff]
+target-version = "py310"
+line-length = 110
+extend-exclude = ["evidence"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
