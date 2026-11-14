@@ -61,6 +61,7 @@ class StreamWorker:
     lsl_name: str
     inlet: Any | None = None
     config: LiveStreamConfig | None = None
+    stream_info: Any | None = None  # last resolved LSL StreamInfo (for reopen)
     buf: deque[np.ndarray] = field(default_factory=deque)
     latest: dict[str, Any] = field(default_factory=dict)
     last_sample_at: float = 0.0
@@ -84,8 +85,11 @@ class EEGConnectionHub:
         self.workers: dict[str, StreamWorker] = {}
         self._started_at = time.time()
         self._resolve_streams = resolve_streams
+        self._clock_injected = local_clock is not None
         self._local_clock = local_clock or time.time
         self._t0 = time.time()
+        self._next_resolve_at = 0.0  # resolve immediately on first live tick
+        self._resolve_task: asyncio.Task[None] | None = None
 
     def health_payload(self) -> dict[str, Any]:
         return {
@@ -132,11 +136,14 @@ class EEGConnectionHub:
                 self.workers[item.stream_id] = StreamWorker(
                     stream_id=item.stream_id,
                     lsl_name=item.lsl_name,
+                    stream_info=item.stream_info,
                     latest=self._wrap(
                         item.stream_id,
                         warming_features(message="collecting live samples"),
                     ),
                 )
+            else:
+                self.workers[item.stream_id].stream_info = item.stream_info
         for sid in list(self.workers):
             if sid not in active_ids and self.config.synth_streams <= 0:
                 self.registry.mark_stale(sid, "LSL stream removed from network")
@@ -164,38 +171,71 @@ class EEGConnectionHub:
             worker.config = build_channel_mapping(item.stream_info)
             worker.last_sample_at = time.monotonic()
 
-    async def _resolve_live_streams(self, pylsl: Any) -> None:
+    def _open_live_inlet_sync(self, stream_info: object, pylsl: Any) -> tuple[Any, LiveStreamConfig]:
+        """Blocking: open inlet and build mapping from inlet.info() (full XML)."""
+        inlet = pylsl.StreamInlet(stream_info)
+        try:
+            # Resolved StreamInfo often lacks XML channel labels; inlet.info() is complete.
+            full_info = inlet.info(timeout=2.0)
+            cfg = build_channel_mapping(full_info)
+        except Exception:
+            try:
+                inlet.close_stream()
+            except (AttributeError, RuntimeError):
+                pass
+            raise
+        return inlet, cfg
+
+    async def _open_live_inlet(self, worker: StreamWorker, pylsl: Any, now: float) -> None:
+        """Open StreamInlet then map channels from the resolved inlet.info()."""
+        if worker.stream_info is None:
+            return
+        try:
+            inlet, cfg = await asyncio.to_thread(
+                self._open_live_inlet_sync, worker.stream_info, pylsl
+            )
+            worker.inlet = inlet
+            worker.config = cfg
+            worker.buf.clear()
+            worker.last_sample_at = now
+            worker.resolve_attempt = 0
+            worker.latest = self._wrap(
+                worker.stream_id,
+                warming_features(
+                    required_samples=max(32, int(cfg.sample_rate * 0.25)),
+                    message="collecting live samples",
+                ),
+            )
+        except (OSError, RuntimeError, TypeError, ValueError, TimeoutError) as exc:
+            worker.resolve_attempt += 1
+            worker.next_resolve_at = now + next_resolve_delay(worker.resolve_attempt - 1)
+            worker.inlet = None
+            worker.config = None
+            worker.latest = self._wrap(
+                worker.stream_id,
+                warming_features(status="error", message=str(exc)[:160]),
+            )
+
+    async def _discover_live_streams(self, pylsl: Any) -> None:
+        """Blocking resolve (in a thread) + register workers. Does not open inlets."""
+        wait = float(self.config.resolve_wait_sec)
         if self._resolve_streams is not None:
             streams = await asyncio.to_thread(self._resolve_streams)
         else:
-            streams = await asyncio.to_thread(pylsl.resolve_streams, wait_time=1.0)
+            streams = await asyncio.to_thread(pylsl.resolve_streams, wait_time=wait)
         discovered = discover_muse_eeg_streams(list(streams))
         await self._ensure_workers_from_discovery(discovered)
+
+    async def _open_pending_inlets(self, pylsl: Any) -> None:
         now = time.monotonic()
-        for item in discovered:
-            worker = self.workers[item.stream_id]
+        for worker in list(self.workers.values()):
             if worker.inlet is None and now >= worker.next_resolve_at:
-                try:
-                    cfg = build_channel_mapping(item.stream_info)
-                    worker.inlet = pylsl.StreamInlet(item.stream_info)
-                    worker.config = cfg
-                    worker.buf.clear()
-                    worker.last_sample_at = now
-                    worker.resolve_attempt = 0
-                    worker.latest = self._wrap(
-                        item.stream_id,
-                        warming_features(
-                            required_samples=max(32, int(cfg.sample_rate * 0.25)),
-                            message="collecting live samples",
-                        ),
-                    )
-                except (OSError, RuntimeError, TypeError, ValueError) as exc:
-                    worker.resolve_attempt += 1
-                    worker.next_resolve_at = now + next_resolve_delay(worker.resolve_attempt - 1)
-                    worker.latest = self._wrap(
-                        item.stream_id,
-                        warming_features(status="error", message=str(exc)[:160]),
-                    )
+                await self._open_live_inlet(worker, pylsl, now)
+
+    async def _resolve_live_streams(self, pylsl: Any) -> None:
+        """Full resolve pass: discover then open pending inlets (safe to run as a task)."""
+        await self._discover_live_streams(pylsl)
+        await self._open_pending_inlets(pylsl)
 
     async def _poll_worker(self, worker: StreamWorker, *, synth: bool, stream_index: int) -> None:
         now = time.monotonic()
@@ -218,24 +258,33 @@ class EEGConnectionHub:
         required_samples = max(32, int(math.ceil(cfg.sample_rate * 0.25)))
 
         try:
-            chunk, timestamps = worker.inlet.pull_chunk(timeout=0.0, max_samples=64)
-            if chunk:
+            got_samples = False
+            # Drain the inlet fully; a single pull_chunk leaves backlog and under-rates.
+            # Cap pulls so synthetic inlets used in tests cannot spin forever.
+            max_pulls = max(8, int(math.ceil(cfg.sample_rate * self.config.window_sec / 64.0)) + 4)
+            clock_fn = getattr(worker.inlet, "local_clock", None) or self._local_clock
+            for _ in range(max_pulls):
+                chunk, timestamps = worker.inlet.pull_chunk(timeout=0.0, max_samples=64)
+                if not chunk:
+                    break
+                got_samples = True
                 arr = np.asarray(chunk, dtype=np.float64)
                 if arr.ndim == 1:
                     arr = arr.reshape(1, -1)
                 if arr.shape[1] != cfg.channel_count:
                     raise ValueError("LSL chunk width changed after connection")
-                clock_fn = getattr(worker.inlet, "local_clock", None) or self._local_clock
+                clock_now = float(clock_fn() if callable(clock_fn) else self._local_clock())
                 validate_lsl_chunk_timestamps(
                     list(timestamps),
                     sample_count=arr.shape[0],
-                    now=float(clock_fn() if callable(clock_fn) else self._local_clock()),
+                    now=clock_now,
                 )
                 mapped = arr[:, cfg.indices]
                 for row in mapped:
                     worker.buf.append(row)
                 while len(worker.buf) > max_samples:
                     worker.buf.popleft()
+            if got_samples:
                 worker.last_sample_at = now
             elif now - worker.last_sample_at > max(2.0, self.config.window_sec):
                 raise RuntimeError("LSL stream stopped delivering samples")
@@ -285,6 +334,9 @@ class EEGConnectionHub:
         if not synth:
             try:
                 pylsl = importlib.import_module("pylsl")
+                # LSL sample stamps are on pylsl.local_clock, not wall time.time.
+                if not self._clock_injected:
+                    self._local_clock = pylsl.local_clock
             except ImportError:
                 logger.warning("pylsl not installed; falling back to synthetic mode")
                 synth = True
@@ -319,7 +371,15 @@ class EEGConnectionHub:
         while True:
             loop_start = time.time()
             if not synth and pylsl is not None:
-                await self._resolve_live_streams(pylsl)
+                now = time.monotonic()
+                # Keep resolve off the broadcast tick so feature_hz stays near target.
+                task = self._resolve_task
+                if now >= self._next_resolve_at and (task is None or task.done()):
+                    self._next_resolve_at = now + float(self.config.resolve_interval_sec)
+                    self._resolve_task = asyncio.create_task(self._resolve_live_streams(pylsl))
+                elif task is None or task.done():
+                    # Between resolves, still retry failed inlet opens without re-resolving.
+                    await self._open_pending_inlets(pylsl)
 
             for idx, sid in enumerate(stream_order):
                 worker = self.workers.get(sid)

@@ -22,6 +22,9 @@ class HubConfig:
     enable_raw_eeg: bool = False
     synth_streams: int = 0
     session_label_prefix: str = "participant"
+    # Live LSL: how often to re-resolve streams (resolve blocks; keep off the broadcast tick).
+    resolve_interval_sec: float = 3.0
+    resolve_wait_sec: float = 0.5
 
     def __post_init__(self) -> None:
         if self.allow_lan and not self.access_token:
@@ -34,6 +37,10 @@ class HubConfig:
             raise ValueError("feature_hz must be positive")
         if self.window_sec <= 0:
             raise ValueError("window_sec must be positive")
+        if self.resolve_interval_sec <= 0:
+            raise ValueError("resolve_interval_sec must be positive")
+        if self.resolve_wait_sec <= 0 or self.resolve_wait_sec > 0.5:
+            raise ValueError("resolve_wait_sec must be in (0, 0.5]")
 
     @property
     def bind_all(self) -> bool:

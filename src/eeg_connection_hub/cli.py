@@ -49,6 +49,13 @@ def build_parser() -> argparse.ArgumentParser:
         default="participant",
         dest="session_label_prefix",
     )
+    parser.add_argument(
+        "--resolve-interval",
+        type=float,
+        default=3.0,
+        dest="resolve_interval_sec",
+        help="Seconds between live LSL resolve passes (default 3.0)",
+    )
     parser.add_argument("-v", "--verbose", action="store_true")
     return parser
 
@@ -73,6 +80,7 @@ def main(argv: list[str] | None = None) -> int:
             enable_raw_eeg=args.enable_raw_eeg,
             synth_streams=args.synth,
             session_label_prefix=args.session_label_prefix,
+            resolve_interval_sec=args.resolve_interval_sec,
         )
     except ValueError as exc:
         print(f"Config error: {exc}", file=sys.stderr)

@@ -1,0 +1,46 @@
+{
+  "date": "2026-11-06",
+  "pytest": "18 passed",
+  "smoke_lsl": {
+    "seconds": 15.0,
+    "envelopes": 301,
+    "streams": {
+      "muse-loop-headset-1": {
+        "total": 151,
+        "safe": 151,
+        "error": 0,
+        "warming": 0,
+        "hz_total": 10.07,
+        "hz_safe": 10.07,
+        "safe_pct": 100.0,
+        "statuses": {
+          "safe": 151
+        }
+      },
+      "muse-loop-headset-2": {
+        "total": 150,
+        "safe": 150,
+        "error": 0,
+        "warming": 0,
+        "hz_total": 10.0,
+        "hz_safe": 10.0,
+        "safe_pct": 100.0,
+        "statuses": {
+          "safe": 150
+        }
+      }
+    }
+  },
+  "success_criteria": {
+    "min_hz_safe": 9.0,
+    "min_safe_pct": 95.0,
+    "met": true
+  },
+  "synth_smoke": {
+    "envelopes": 61,
+    "safe": 61,
+    "hz_approx": 10.17
+  },
+  "hardware": "unverified \u2014 fake pylsl Muse outlets only",
+  "notes": "Resolve runs as background task; channel labels from inlet.info(); local_clock=pylsl.local_clock; drain pull_chunk until empty."
+}

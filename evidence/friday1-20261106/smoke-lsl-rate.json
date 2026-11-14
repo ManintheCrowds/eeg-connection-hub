@@ -1,0 +1,71 @@
+{
+  "health": {
+    "status": "ok",
+    "uptime_sec": 4.92,
+    "streams_active": 2,
+    "subscribers": 0,
+    "bind": "127.0.0.1",
+    "allow_lan": false,
+    "raw_eeg_enabled": false,
+    "auth_required": false
+  },
+  "streams_before": {
+    "streams": [
+      {
+        "stream_id": "muse-loop-headset-1",
+        "lsl_name": "MuseS-LOOP-01",
+        "session_id": "451ca038c8e94a60",
+        "session_label": "participant-001",
+        "status": "safe",
+        "stale": false,
+        "last_frame_ts": 1794007143.0668828,
+        "message": ""
+      },
+      {
+        "stream_id": "muse-loop-headset-2",
+        "lsl_name": "MuseS-LOOP-02",
+        "session_id": "5fb1ace1fdd432e2",
+        "session_label": "participant-002",
+        "status": "safe",
+        "stale": false,
+        "last_frame_ts": 1794007143.0683072,
+        "message": ""
+      }
+    ]
+  },
+  "rate": {
+    "seconds": 15.0,
+    "envelopes": 301,
+    "streams": {
+      "muse-loop-headset-1": {
+        "total": 151,
+        "safe": 151,
+        "error": 0,
+        "warming": 0,
+        "hz_total": 10.07,
+        "hz_safe": 10.07,
+        "safe_pct": 100.0,
+        "statuses": {
+          "safe": 151
+        }
+      },
+      "muse-loop-headset-2": {
+        "total": 150,
+        "safe": 150,
+        "error": 0,
+        "warming": 0,
+        "hz_total": 10.0,
+        "hz_safe": 10.0,
+        "safe_pct": 100.0,
+        "statuses": {
+          "safe": 150
+        }
+      }
+    }
+  },
+  "success_criteria": {
+    "min_hz_safe": 9.0,
+    "min_safe_pct": 95.0,
+    "met": true
+  }
+}
