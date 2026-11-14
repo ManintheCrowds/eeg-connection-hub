@@ -10,10 +10,10 @@ import socket
 import threading
 import time
 import uuid
-import urllib.request
 from collections import Counter
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator
+from typing import Any
 
 import pytest
 
