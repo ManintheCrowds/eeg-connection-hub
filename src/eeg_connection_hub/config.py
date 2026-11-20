@@ -7,6 +7,12 @@ from __future__ import annotations
 import secrets
 from dataclasses import dataclass
 
+LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+def is_loopback_host(host: str) -> bool:
+    return host.strip().lower().strip("[]") in LOOPBACK_HOSTS
+
 
 @dataclass(frozen=True)
 class HubConfig:
@@ -22,13 +28,18 @@ class HubConfig:
     enable_raw_eeg: bool = False
     synth_streams: int = 0
     session_label_prefix: str = "participant"
+    allow_origins: tuple[str, ...] = ()
+    allow_hosts: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.allow_lan and not self.access_token:
             object.__setattr__(self, "access_token", secrets.token_urlsafe(32))
-        if self.host not in ("127.0.0.1", "localhost", "0.0.0.0") and not self.allow_lan:
-            raise ValueError("non-loopback bind requires allow_lan=True")
-        if self.enable_raw_eeg and self.host not in ("127.0.0.1", "localhost"):
+        if not is_loopback_host(self.host) and not self.allow_lan:
+            raise ValueError(
+                f"non-loopback bind {self.host!r} requires --allow-lan (and an access token); "
+                "use the default 127.0.0.1 for local-only use"
+            )
+        if self.enable_raw_eeg and not is_loopback_host(self.host):
             raise ValueError("raw EEG export is loopback-only")
         if self.feature_hz <= 0:
             raise ValueError("feature_hz must be positive")
@@ -37,7 +48,7 @@ class HubConfig:
 
     @property
     def bind_all(self) -> bool:
-        return self.host == "0.0.0.0"
+        return self.host in ("0.0.0.0", "::")
 
     @classmethod
     def loopback_synth(cls, *, streams: int = 2) -> HubConfig:
