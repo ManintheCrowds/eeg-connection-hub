@@ -13,12 +13,25 @@ Local lab / LAN collaboration tool. **Not** hardened for internet exposure.
 
 Requires **both**:
 
-1. `--allow-lan` (binds `0.0.0.0`)
-2. `--access-token <secret>` (auto-generated if omitted)
+1. `--allow-lan` (binds `0.0.0.0`, or the given `--host`)
+2. An access token: `--access-token <secret>` or `$EEG_HUB_ACCESS_TOKEN` (preferred: keeps it out of `ps`). If omitted, one is auto-generated and printed once to stderr.
 
-Clients must pass `?token=` on WebSocket URLs and HTTP requests.
+A non-loopback `--host` (e.g. `0.0.0.0`) without `--allow-lan` is a startup error (exit 2).
+
+Clients send `Authorization: Bearer <token>` on the WebSocket handshake and HTTP requests. The old `?token=` query parameter still works but is **deprecated** (URLs end up in logs, shell history, and proxies); the hub logs a one-time warning when it is used.
 
 Unauthorized clients receive HTTP 401 or WebSocket close `4401`.
+
+## Browser protections (Origin / Host)
+
+A web page in the user's browser can try to reach a local hub. Two checks run before auth on both the WebSocket handshake and HTTP (`/health`, `/streams`); failures get HTTP 403:
+
+- **Origin allowlist** — requests with no `Origin` (curl, Python, native apps) and loopback origins (`http(s)://localhost`, `127.0.0.1`, `[::1]`, any port) are allowed. Anything else, including `null`, needs `--allow-origin <origin>` (repeatable).
+- **Host check (DNS rebinding)** — loopback mode accepts only `localhost`, `127.0.0.1`, `[::1]` (any port). LAN mode also accepts the bound address, any IP literal (rebinding requires a DNS name), and names given with `--allow-host` (e.g. `labpc.local`). Requests without a `Host` header are rejected.
+
+## Log redaction
+
+Access tokens are scrubbed (`token=***`, `Bearer ***`, and the literal token value) from every log record, including websockets' handshake debug lines under `-v`. The startup log line never contains the token.
 
 ## Raw EEG opt-in
 

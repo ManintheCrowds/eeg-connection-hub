@@ -68,8 +68,12 @@ Inner payload remains **`enthea.muse.features/v1`** for compatibility. Hub wraps
 
 ### Security boundaries
 
-- Default: loopback only, no token.
-- LAN: `--allow-lan` + access token on WS query (`?token=`) and HTTP.
+- Default: loopback only, no token. Non-loopback `--host` without `--allow-lan` refuses to start.
+- LAN: `--allow-lan` + access token via `Authorization: Bearer` on WS handshake and HTTP (legacy `?token=` accepted, logs a deprecation warning). Missing/wrong token: HTTP 401 / WS close 4401.
+- Front-door checks (`security.py`, wired via websockets `process_request` and the HTTP handler), applied before auth:
+  - `Host` allowlist (DNS rebinding): loopback names always; in LAN mode also the bound host, IP literals, and `--allow-host` names. Else 403.
+  - `Origin` allowlist: absent (non-browser) or loopback origins; others need `--allow-origin`. Else 403.
+- Logs: a handler-level filter redacts `?token=…`, `Bearer …`, and the literal token from all records (including websockets debug output under `-v`).
 - Raw EEG: disabled unless `--enable-raw-eeg`; loopback-only; excluded from logs.
 - Internet multi-tenancy: **out of scope** for beta.
 
