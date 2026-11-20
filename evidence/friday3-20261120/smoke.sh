@@ -12,7 +12,7 @@ echo "# $($PY --version)  websockets $($PY -c 'import websockets; print(websocke
 echo
 echo "## start hub (loopback, synthetic)"
 echo "\$ $PY -m eeg_connection_hub.cli --synth 2 --ws-port $WS --http-port $HTTP -v &"
-$PY -m eeg_connection_hub.cli --synth 2 --ws-port $WS --http-port $HTTP -v >"$HERE/hub-stderr.log" 2>&1 &
+$PY -m eeg_connection_hub.cli --synth 2 --ws-port $WS --http-port $HTTP -v >"$HERE/hub-stderr.txt" 2>&1 &
 HUB=$!
 sleep 2
 
@@ -35,7 +35,7 @@ run $PY -m eeg_connection_hub.cli --host 0.0.0.0 --synth 2
 echo "## (v, bonus) LAN mode + -v: Bearer header works, wrong token 401, token never in logs"
 # Random throwaway token generated here and never echoed; passed via env, not argv.
 export EEG_HUB_ACCESS_TOKEN="$($PY -c 'import secrets; print(secrets.token_urlsafe(24))')"
-$PY -m eeg_connection_hub.cli --allow-lan --synth 2 --ws-port $WS --http-port $HTTP -v >"$HERE/hub-lan-stderr.log" 2>&1 &
+$PY -m eeg_connection_hub.cli --allow-lan --synth 2 --ws-port $WS --http-port $HTTP -v >"$HERE/hub-lan-stderr.txt" 2>&1 &
 HUB=$!
 sleep 2
 echo "\$ curl -H 'Authorization: Bearer <token>' http://127.0.0.1:$HTTP/streams   -> HTTP \
@@ -62,13 +62,13 @@ async def main():
 asyncio.run(main())
 PYEOF
 kill $HUB; wait $HUB 2>/dev/null
-echo "token occurrences in -v hub log: $(grep -cF "$EEG_HUB_ACCESS_TOKEN" "$HERE/hub-lan-stderr.log")"
-echo "redacted markers in -v hub log:  $(grep -c 'token=\*\*\*' "$HERE/hub-lan-stderr.log")"
-grep -m3 -E 'token=\*\*\*|deprecated' "$HERE/hub-lan-stderr.log"
+echo "token occurrences in -v hub log: $(grep -cF "$EEG_HUB_ACCESS_TOKEN" "$HERE/hub-lan-stderr.txt")"
+echo "redacted markers in -v hub log:  $(grep -c 'token=\*\*\*' "$HERE/hub-lan-stderr.txt")"
+grep -m3 -E 'token=\*\*\*|deprecated' "$HERE/hub-lan-stderr.txt"
 unset EEG_HUB_ACCESS_TOKEN
 echo
 echo "## hub log excerpt (rejections)"
-grep -E "rejected|connection rejected" "$HERE/hub-stderr.log"
+grep -E "rejected|connection rejected" "$HERE/hub-stderr.txt"
 
 # Elide random per-connection WebSocket handshake nonces (not secrets, but they trip gitleaks' generic rule).
-sed -i -E 's/(Sec-WebSocket-(Key|Accept): ).*/\1<per-connection nonce elided>/' "$HERE"/hub-*.log
+sed -i -E 's/(Sec-WebSocket-(Key|Accept): ).*/\1<per-connection nonce elided>/' "$HERE"/hub-*stderr.txt

@@ -1,4 +1,4 @@
-# date: 2026-11-20 17:20:13 CST  git: 762febf
+# date: 2026-11-20 17:20:42 CST  git: 2503677
 # Python 3.13.5  websockets 17.4
 
 ## start hub (loopback, synthetic)
