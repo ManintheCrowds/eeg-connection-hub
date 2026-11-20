@@ -1,0 +1,54 @@
+# date: 2026-11-20 17:20:13 CST  git: 762febf
+# Python 3.13.5  websockets 17.4
+
+## start hub (loopback, synthetic)
+$ /workspace/raise/f3venv/py3.13/bin/python -m eeg_connection_hub.cli --synth 2 --ws-port 28765 --http-port 28766 -v &
+## (i) WS with Origin https://evil.example -> expect rejection
+$ /workspace/raise/f3venv/py3.13/bin/python /workspace/raise/eeg-friday3/evidence/friday3-20261120/ws_probe.py ws://127.0.0.1:28765 https://evil.example
+REJECTED HTTP 403 body='forbidden origin'
+[exit 1]
+
+## (ii) WS with Origin http://localhost:28766 -> expect frames
+$ /workspace/raise/f3venv/py3.13/bin/python /workspace/raise/eeg-friday3/evidence/friday3-20261120/ws_probe.py ws://127.0.0.1:28765 http://localhost:28766
+FRAME stream_id=muse-demo-headset-1 schema=eeg-connection-hub.envelope/v1
+FRAME stream_id=muse-demo-headset-2 schema=eeg-connection-hub.envelope/v1
+FRAME stream_id=muse-demo-headset-1 schema=eeg-connection-hub.envelope/v1
+[exit 0]
+
+## (iii) /health with Host: evil.example (DNS rebinding) -> expect 403; Host: 127.0.0.1 -> 200
+$ curl -sS -i -H Host: evil.example http://127.0.0.1:28766/health
+HTTP/1.1 403 Forbidden
+Content-Type: application/json
+Content-Length: 27
+
+{"error": "forbidden host"}[exit 0]
+
+
+$ curl -sS -i -H Host: 127.0.0.1 http://127.0.0.1:28766/health
+HTTP/1.1 200 OK
+Content-Type: application/json
+Content-Length: 166
+
+{"status": "ok", "uptime_sec": 2.07, "streams_active": 2, "subscribers": 0, "bind": "127.0.0.1", "allow_lan": false, "raw_eeg_enabled": false, "auth_required": false}[exit 0]
+
+
+## (iv) --host 0.0.0.0 without --allow-lan -> expect non-zero exit + clear message
+$ /workspace/raise/f3venv/py3.13/bin/python -m eeg_connection_hub.cli --host 0.0.0.0 --synth 2
+Config error: --host 0.0.0.0 is not a loopback address; refusing to expose the hub without --allow-lan (which also enforces an access token). Use the default --host 127.0.0.1 for local-only use.
+[exit 2]
+
+## (v, bonus) LAN mode + -v: Bearer header works, wrong token 401, token never in logs
+$ curl -H 'Authorization: Bearer <token>' http://127.0.0.1:28766/streams   -> HTTP 200
+$ curl -H 'Authorization: Bearer wrong' http://127.0.0.1:28766/streams      -> HTTP 401
+$ curl 'http://127.0.0.1:28766/health?token=<token>' (deprecated)          -> HTTP 200
+WS Bearer: FRAME muse-demo-headset-1
+WS ?token= (deprecated): FRAME muse-demo-headset-1
+WS wrong token: closed code 4401 unauthorized
+token occurrences in -v hub log: 0
+redacted markers in -v hub log:  1
+WARNING eeg_connection_hub.hub_server: HTTP client sent the access token in the URL query (?token=); this is deprecated and leaks into logs/history — use the 'Authorization: Bearer <token>' header
+DEBUG websockets.server: < GET /?token=*** HTTP/1.1
+
+## hub log excerpt (rejections)
+INFO eeg_connection_hub.hub_server: rejected WebSocket handshake: forbidden origin
+INFO eeg_connection_hub.hub_server: rejected HTTP request: forbidden host
