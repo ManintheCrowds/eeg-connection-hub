@@ -1,0 +1,3 @@
+# RFC 6455 sample Sec-WebSocket-Key nonce in a test helper (commit 3bbbdbf); replaced by a runtime-random
+# nonce in the next commit. Not a secret. Fingerprint-scoped so any new finding still fails CI.
+3bbbdbffd79c366e97b518c00f2506a5024da57b:tests/test_security.py:generic-api-key:69

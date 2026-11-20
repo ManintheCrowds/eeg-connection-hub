@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import io
 import json
 import logging
+import os
 import subprocess
 import sys
 
@@ -66,7 +68,8 @@ def _upgrade(host: str, origin: str | None = None) -> str:
         "GET / HTTP/1.1\r\n"
         f"Host: {host}\r\n{origin_line}"
         "Upgrade: websocket\r\nConnection: Upgrade\r\n"
-        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n"
+        f"Sec-WebSocket-Key: {base64.b64encode(os.urandom(16)).decode()}\r\n"
+        "Sec-WebSocket-Version: 13\r\n\r\n"
     )
 
 
