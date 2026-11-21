@@ -72,7 +72,8 @@ Inner payload remains **`enthea.muse.features/v1`** for compatibility. Hub wraps
 - LAN: `--allow-lan` + access token via `Authorization: Bearer` on WS handshake and HTTP. Operator-supplied tokens (`--access-token`, `$EEG_HUB_ACCESS_TOKEN`) must be at least 32 characters or startup exits 2. An omitted token is auto-generated into a mode-0600 file under `$XDG_STATE_HOME` (default `~/.local/state`); stderr gets the path only, so service logs do not capture the secret. Legacy `?token=` is accepted until 0.2.0 and logs a deprecation warning. Missing/wrong token: HTTP 401 / WS close 4401.
 - Front-door checks (`security.py`, wired via websockets `process_request` and the HTTP handler), applied before auth:
   - `Host` allowlist (DNS rebinding): loopback names always; in LAN mode also the bound host, IP literals, and `--allow-host` names. Else 403.
-  - `Origin` allowlist: absent (non-browser) or loopback origins; others need `--allow-origin`. Else 403.
+  - `Origin` allowlist: absent (non-browser) or loopback origins; others need `--allow-origin`. Else 403. `--allow-origin null` is rejected at startup.
+  - A repeated `Host` or `Origin` is HTTP 400 on HTTP and on both WebSocket hooks. A single disallowed value stays HTTP 403.
 - Logs: a handler-level filter redacts the configured token (including percent-encoded forms) before the `?token=…` and `Bearer …` patterns. That covers websockets debug output and exception tracebacks (`exc_info`, `exc_text`, `stack_info`) under `-v`.
 - Raw EEG: disabled unless `--enable-raw-eeg`; loopback-only; excluded from logs.
 - Internet multi-tenancy: **out of scope** for beta.

@@ -8,7 +8,8 @@ from __future__ import annotations
 import ipaddress
 import logging
 import re
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from http import HTTPStatus
 from urllib.parse import quote, quote_plus, urlsplit
 
 from eeg_connection_hub.config import LOOPBACK_HOSTS, HubConfig
@@ -109,13 +110,58 @@ def origin_allowed(config: HubConfig, origin: str | None) -> bool:
     return is_loopback_origin(norm)
 
 
+def header_values(headers: object, name: str) -> list[str]:
+    """Every value for ``name``.
+
+    websockets' ``Headers.get`` raises when the header is repeated, which the
+    handshake turns into HTTP 500. ``get_all`` returns each value so the caller
+    can reject the duplicate itself.
+    """
+    get_all = getattr(headers, "get_all", None)
+    if callable(get_all):
+        return [str(value) for value in get_all(name)]
+    if headers is None:
+        return []
+    getter = getattr(headers, "get", None)
+    if not callable(getter):
+        return []
+    value = getter(name)
+    if value is None:
+        return []
+    return [str(value)]
+
+
+def front_door_decision(
+    config: HubConfig,
+    host_values: Sequence[str],
+    origin_values: Sequence[str],
+) -> tuple[HTTPStatus, str] | None:
+    """Return ``(status, reason)`` or None when the request may proceed.
+
+    A repeated Host or Origin is HTTP 400. A missing or disallowed Host, or a
+    disallowed Origin, is HTTP 403. HTTP and both WebSocket hooks share this.
+    """
+    if len(host_values) > 1:
+        return HTTPStatus.BAD_REQUEST, "duplicate host"
+    if len(origin_values) > 1:
+        return HTTPStatus.BAD_REQUEST, "duplicate origin"
+    host = host_values[0] if host_values else None
+    origin = origin_values[0] if origin_values else None
+    if not host_allowed(config, host):
+        return HTTPStatus.FORBIDDEN, "forbidden host"
+    if not origin_allowed(config, origin):
+        return HTTPStatus.FORBIDDEN, "forbidden origin"
+    return None
+
+
 def check_request(config: HubConfig, host_header: str | None, origin: str | None) -> str | None:
     """Return a short rejection reason, or None when the request may proceed."""
-    if not host_allowed(config, host_header):
-        return "forbidden host"
-    if not origin_allowed(config, origin):
-        return "forbidden origin"
-    return None
+    hosts = [host_header] if host_header is not None else []
+    origins = [origin] if origin is not None else []
+    decision = front_door_decision(config, hosts, origins)
+    if decision is None:
+        return None
+    return decision[1]
 
 
 def bearer_token(authorization: str | None) -> str | None:

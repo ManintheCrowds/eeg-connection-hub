@@ -24,7 +24,7 @@ from eeg_connection_hub.config import HubConfig
 from eeg_connection_hub.features import features_from_buffer, synth_features, warming_features
 from eeg_connection_hub.lsl_discovery import DiscoveredStream, discover_muse_eeg_streams
 from eeg_connection_hub.schemas import build_envelope, validate_envelope
-from eeg_connection_hub.security import check_request, extract_token
+from eeg_connection_hub.security import extract_token, front_door_decision, header_values
 from eeg_connection_hub.stream_mapping import (
     LiveStreamConfig,
     build_channel_mapping,
@@ -380,21 +380,30 @@ class EEGConnectionHub:
                 where,
             )
 
+    def _front_door(self, headers: Any) -> tuple[HTTPStatus, str] | None:
+        return front_door_decision(
+            self.config,
+            header_values(headers, "Host"),
+            header_values(headers, "Origin"),
+        )
+
     def process_request_new(self, connection: Any, request: Any) -> Any:
-        """websockets>=13 asyncio-API hook: reject bad Host/Origin with HTTP 403 before upgrade."""
-        reason = check_request(self.config, request.headers.get("Host"), request.headers.get("Origin"))
-        if reason is None:
+        """websockets>=13 asyncio hook: duplicate Host/Origin is 400, disallowed is 403."""
+        decision = self._front_door(request.headers)
+        if decision is None:
             return None
+        status, reason = decision
         logger.info("rejected WebSocket handshake: %s", reason)
-        return connection.respond(HTTPStatus.FORBIDDEN, f"{reason}\n")
+        return connection.respond(status, f"{reason}\n")
 
     def process_request_legacy(self, path: str, request_headers: Any) -> Any:
-        """websockets legacy-API hook (websockets 12): same checks, tuple response."""
-        reason = check_request(self.config, request_headers.get("Host"), request_headers.get("Origin"))
-        if reason is None:
+        """websockets 12 hook: same 400/403 decisions as :meth:`process_request_new`."""
+        decision = self._front_door(request_headers)
+        if decision is None:
             return None
+        status, reason = decision
         logger.info("rejected WebSocket handshake: %s", reason)
-        return (HTTPStatus.FORBIDDEN, [("Content-Type", "text/plain")], f"{reason}\n".encode())
+        return (status, [("Content-Type", "text/plain")], f"{reason}\n".encode())
 
     async def ws_handler(self, websocket: Any) -> None:
         _, query = _ws_path_and_query(websocket)
@@ -433,25 +442,34 @@ class EEGConnectionHub:
             parts = request_line.split()
             method = parts[0] if parts else "GET"
             path = parts[1] if len(parts) > 1 else "/"
-            headers: dict[str, str] = {}
+            collected: dict[str, list[str]] = {}
             for _ in range(100):
                 line = await reader.readline()
                 if line in (b"\r\n", b"\n", b""):
                     break
                 name, sep, value = line.decode("latin-1").partition(":")
                 if sep:
-                    headers.setdefault(name.strip().lower(), value.strip())
+                    collected.setdefault(name.strip().lower(), []).append(value.strip())
 
-            reason = check_request(self.config, headers.get("host"), headers.get("origin"))
-            if reason is not None:
+            decision = front_door_decision(
+                self.config,
+                collected.get("host", []),
+                collected.get("origin", []),
+            )
+            if decision is not None:
+                status, reason = decision
                 logger.info("rejected HTTP request: %s", reason)
                 body = json.dumps({"error": reason}).encode("utf-8")
-                writer.write(b"HTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\n")
+                writer.write(
+                    f"HTTP/1.1 {int(status)} {status.phrase}\r\nContent-Type: application/json\r\n".encode()
+                )
                 writer.write(f"Content-Length: {len(body)}\r\n\r\n".encode())
                 writer.write(body)
                 await writer.drain()
                 writer.close()
                 return
+
+            headers = {name: values[0] for name, values in collected.items() if values}
 
             parsed = urlparse(path)
             query = parse_qs(parsed.query)

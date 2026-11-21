@@ -10,15 +10,18 @@ import logging
 import os
 import subprocess
 import sys
+from types import SimpleNamespace
 from urllib.parse import quote
 
 import pytest
 import websockets
 from test_integration import _free_port, _recv_envelope, running_hub
+from websockets.datastructures import Headers
 from websockets.exceptions import ConnectionClosed, InvalidStatus
 
 from eeg_connection_hub import cli
 from eeg_connection_hub.config import HubConfig
+from eeg_connection_hub.hub_server import EEGConnectionHub
 from eeg_connection_hub.security import (
     RedactingFilter,
     bearer_token,
@@ -134,6 +137,54 @@ def test_host_allowed_lan_mode_and_extra_hosts() -> None:
     assert not host_allowed(cfg, "evil.example")
     bound = HubConfig(host="192.168.1.20", allow_lan=True, access_token=TOKEN)
     assert host_allowed(bound, "192.168.1.20:8765")
+
+
+def test_null_allow_origin_rejected(capsys: pytest.CaptureFixture[str]) -> None:
+    for value in ("null", "NULL", " null ", "null/"):
+        with pytest.raises(ValueError, match="null"):
+            HubConfig(allow_origins=(value,))
+    assert HubConfig(allow_origins=("https://app.example",)).allow_origins == ("https://app.example",)
+    assert cli.main(["--allow-origin", "null", "--allow-origin", "https://app.example", "--synth", "1"]) == 2
+    err = capsys.readouterr().err
+    assert "Config error:" in err and "null" in err
+
+
+def test_ws_hooks_reject_duplicate_host_and_origin() -> None:
+    hub = EEGConnectionHub(_loopback_config())
+
+    class _Conn:
+        def respond(self, status: object, text: str) -> tuple[object, str]:
+            return status, text
+
+    duplicate_host = Headers([("Host", "127.0.0.1"), ("Host", "evil.example")])
+    same_host_twice = Headers([("Host", "127.0.0.1"), ("Host", "127.0.0.1")])
+    duplicate_origin = Headers(
+        [
+            ("Host", "127.0.0.1"),
+            ("Origin", "http://localhost"),
+            ("Origin", "https://evil.example"),
+        ]
+    )
+    conn = _Conn()
+    for headers, reason in (
+        (duplicate_host, "duplicate host"),
+        (same_host_twice, "duplicate host"),
+        (duplicate_origin, "duplicate origin"),
+    ):
+        new = hub.process_request_new(conn, SimpleNamespace(headers=headers))
+        legacy = hub.process_request_legacy("/", headers)
+        assert new is not None and legacy is not None
+        assert int(new[0]) == int(legacy[0]) == 400
+        assert reason in new[1]
+        assert reason.encode() in legacy[2]
+    bad_host = Headers([("Host", "evil.example")])
+    forbidden = hub.process_request_new(conn, SimpleNamespace(headers=bad_host))
+    legacy_forbidden = hub.process_request_legacy("/", bad_host)
+    assert forbidden is not None and legacy_forbidden is not None
+    assert int(forbidden[0]) == int(legacy_forbidden[0]) == 403
+    ok = Headers([("Host", "127.0.0.1")])
+    assert hub.process_request_new(conn, SimpleNamespace(headers=ok)) is None
+    assert hub.process_request_legacy("/", ok) is None
 
 
 def test_origin_policy() -> None:
@@ -629,6 +680,54 @@ async def test_http_rebinding_host_rejected(path: str) -> None:
         for good in ("127.0.0.1", f"localhost:{cfg.http_port}", f"[::1]:{cfg.http_port}"):
             status, _ = await _raw_http(cfg.http_port, _get(path, host=good))
             assert status == 200, good
+
+
+def _repeated(path: str, name: str, values: list[str]) -> str:
+    lines = "".join(f"{name}: {value}\r\n" for value in values)
+    return f"GET {path} HTTP/1.1\r\n{lines}Connection: close\r\n\r\n"
+
+
+async def test_duplicate_host_and_origin_rejected_on_http_and_ws() -> None:
+    cfg = _loopback_config()
+    async with running_hub(cfg):
+        for path in ("/health", "/streams"):
+            request = _repeated(path, "Host", ["127.0.0.1", "evil.example"])
+            status, body = await _raw_http(cfg.http_port, request)
+            assert status == 400 and json.loads(body)["error"] == "duplicate host"
+            origin_req = (
+                f"GET {path} HTTP/1.1\r\n"
+                "Host: 127.0.0.1\r\n"
+                "Origin: http://localhost\r\n"
+                "Origin: https://evil.example\r\n"
+                "Connection: close\r\n\r\n"
+            )
+            status, body = await _raw_http(cfg.http_port, origin_req)
+            assert status == 400 and json.loads(body)["error"] == "duplicate origin", path
+        key = base64.b64encode(os.urandom(16)).decode()
+        host_dup = (
+            "GET / HTTP/1.1\r\n"
+            f"Host: 127.0.0.1:{cfg.ws_port}\r\n"
+            "Host: evil.example\r\n"
+            "Upgrade: websocket\r\n"
+            "Connection: Upgrade\r\n"
+            f"Sec-WebSocket-Key: {key}\r\n"
+            "Sec-WebSocket-Version: 13\r\n\r\n"
+        )
+        status, body = await _raw_http(cfg.ws_port, host_dup)
+        assert status == 400 and b"duplicate host" in body
+        key = base64.b64encode(os.urandom(16)).decode()
+        origin_dup = (
+            "GET / HTTP/1.1\r\n"
+            f"Host: 127.0.0.1:{cfg.ws_port}\r\n"
+            "Origin: http://127.0.0.1\r\n"
+            "Origin: https://evil.example\r\n"
+            "Upgrade: websocket\r\n"
+            "Connection: Upgrade\r\n"
+            f"Sec-WebSocket-Key: {key}\r\n"
+            "Sec-WebSocket-Version: 13\r\n\r\n"
+        )
+        status, body = await _raw_http(cfg.ws_port, origin_dup)
+        assert status == 400 and b"duplicate origin" in body
 
 
 async def test_http_foreign_origin_rejected() -> None:

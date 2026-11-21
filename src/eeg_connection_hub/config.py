@@ -14,6 +14,11 @@ def is_loopback_host(host: str) -> bool:
     return host.strip().lower().strip("[]") in LOOPBACK_HOSTS
 
 
+def _is_null_origin(origin: str) -> bool:
+    """True for the opaque origin ``null`` (any case, surrounding slash/space)."""
+    return origin.strip().rstrip("/").lower() == "null"
+
+
 @dataclass(frozen=True)
 class HubConfig:
     """Validated hub server configuration."""
@@ -32,6 +37,12 @@ class HubConfig:
     allow_hosts: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        for origin in self.allow_origins:
+            if _is_null_origin(origin):
+                raise ValueError(
+                    "--allow-origin null is not allowed; the opaque null origin is sent by "
+                    "sandboxed pages and non-HTTP contexts and cannot be allowlisted"
+                )
         if self.allow_lan and not self.access_token:
             object.__setattr__(self, "access_token", secrets.token_urlsafe(32))
         if not is_loopback_host(self.host) and not self.allow_lan:

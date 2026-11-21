@@ -26,8 +26,9 @@ Unauthorized clients receive HTTP 401 or WebSocket close `4401`.
 
 A web page in the user's browser can try to reach a local hub. Two checks run before auth on both the WebSocket handshake and HTTP (`/health`, `/streams`); failures get HTTP 403:
 
-- **Origin allowlist** — requests with no `Origin` (curl, Python, native apps) and loopback origins (`http(s)://localhost`, `127.0.0.1`, `[::1]`, any port) are allowed. Anything else, including `null`, needs `--allow-origin <origin>` (repeatable).
+- **Origin allowlist** — requests with no `Origin` (curl, Python, native apps) and loopback origins (`http(s)://localhost`, `127.0.0.1`, `[::1]`, any port) are allowed. Anything else, including the opaque origin `null`, is rejected. `--allow-origin null` is a startup error: that origin cannot be allowlisted.
 - **Host check (DNS rebinding)** — loopback mode accepts only `localhost`, `127.0.0.1`, `[::1]` (any port). LAN mode also accepts the bound address, any IP literal (rebinding requires a DNS name), and names given with `--allow-host` (e.g. `labpc.local`). Requests without a `Host` header are rejected.
+- **Duplicate Host or Origin** — more than one `Host` or `Origin` is HTTP 400 on HTTP and on both WebSocket hooks (the asyncio hook and the legacy websockets 12 hook). HTTP does not keep the first value, and the WebSocket hooks do not turn the duplicate into HTTP 500. A disallowed single value is still HTTP 403.
 
 ## Log redaction
 
