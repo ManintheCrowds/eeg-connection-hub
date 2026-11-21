@@ -31,7 +31,7 @@ A web page in the user's browser can try to reach a local hub. Two checks run be
 
 ## Log redaction
 
-Access tokens are scrubbed (`token=***`, `Bearer ***`, and the literal token value) from every log record, including websockets' handshake debug lines under `-v`. The same filter cleans `exc_info`, `exc_text`, and `stack_info`, so a malformed header that echoes the token inside a `ValueError` traceback (for example an `Authorization` value with a stray control byte) does not land in the log. The startup log line never contains the token.
+Access tokens are scrubbed (`token=***`, `Bearer ***`, and the literal token value) from every log record, including websockets' handshake debug lines under `-v`. The same filter cleans `exc_info`, `exc_text`, and `stack_info`, so a malformed header that echoes the token inside a `ValueError` traceback (for example an `Authorization` value with a stray control byte) does not land in the log. The configured token is replaced first — including percent-encoded forms, upper or lower hex, and that encoded value when it appears outside `token=` — and only then do the `token=` / `Bearer` patterns run. Characters such as `!`, `:`, and `,` used to leave a suffix in header dumps and `?token=` lines; the exact value is removed in full. The startup log line never contains the token.
 
 ## Raw EEG opt-in
 

@@ -10,6 +10,7 @@ import logging
 import os
 import subprocess
 import sys
+from urllib.parse import quote
 
 import pytest
 import websockets
@@ -29,6 +30,26 @@ from eeg_connection_hub.security import (
 )
 
 TOKEN = "unit-test-token-Zx9qP"  # synthetic test value, not a real secret
+
+
+def _punct_token() -> str:
+    """Runtime token. ``!``, ``:``, and ``,`` sit outside the bearer/query patterns."""
+    alphabet = "abcdefghijklmnop"
+    core = "".join(alphabet[byte % len(alphabet)] for byte in os.urandom(12))
+    return core[:4] + "!" + core[4:8] + ":" + core[8:] + ",z"
+
+
+def _lower_percent_hex(encoded: str) -> str:
+    out: list[str] = []
+    index = 0
+    while index < len(encoded):
+        if encoded[index] == "%" and index + 2 < len(encoded):
+            out.append(encoded[index : index + 3].lower())
+            index += 3
+        else:
+            out.append(encoded[index])
+            index += 1
+    return "".join(out)
 
 
 def _loopback_config(**kw: object) -> HubConfig:
@@ -153,6 +174,60 @@ def test_redact_helpers() -> None:
     assert redact(f"value {TOKEN} here", [TOKEN]) == "value *** here"
     hint = "URL query (?token=); use the 'Authorization: Bearer <token>' header"
     assert redact(hint) == hint  # placeholders in our own warning stay readable
+
+
+def test_redact_exact_token_before_patterns_and_percent_forms() -> None:
+    """'!', ':', ',' used to survive as a suffix; percent-encoding must go too."""
+    token = _punct_token()
+    tail = token.split("!", 1)[1]
+    assert ":" in tail and "," in tail
+    header = f"> Authorization: Bearer {token}\r\n"
+    query = f"< GET /health?token={token}&x=1 HTTP/1.1"
+    for text in (header, query):
+        out = redact(text, [token])
+        assert token not in out
+        assert tail not in out
+        assert "***" in out
+    encoded = quote(token, safe="")
+    assert "%" in encoded and token not in encoded
+    outside = f"note {encoded} end"
+    out = redact(outside, [token])
+    assert encoded not in out and token not in out and "***" in out
+    lowered = _lower_percent_hex(encoded)
+    assert lowered != encoded
+    out = redact(f"cache {lowered}", [token])
+    assert lowered not in out and "***" in out
+    out = redact(f"GET /?token={encoded}&x=1", [token])
+    assert encoded not in out and token not in out
+    doubled = quote(encoded, safe="")
+    assert doubled != encoded
+    out = redact(f"dbl {doubled}", [token])
+    assert doubled not in out and "***" in out
+
+
+def test_filter_redacts_punctuated_token_in_header_dump() -> None:
+    token = _punct_token()
+    tail = token.split("!", 1)[1]
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.addFilter(RedactingFilter([token]))
+    log = logging.getLogger("eeg_test_redact_punct")
+    log.addHandler(handler)
+    log.propagate = False
+    log.setLevel(logging.DEBUG)
+    try:
+        log.debug("> Authorization: Bearer %s", token)
+        log.debug("< GET /?token=%s HTTP/1.1", token)
+        encoded = quote(token, safe="")
+        log.debug("path %s", encoded)
+    finally:
+        log.removeHandler(handler)
+        log.propagate = True
+    text = stream.getvalue()
+    assert token not in text
+    assert tail not in text
+    assert encoded not in text
+    assert "***" in text
 
 
 def test_redacting_filter_scrubs_args() -> None:

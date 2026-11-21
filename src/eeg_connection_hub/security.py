@@ -9,13 +9,17 @@ import ipaddress
 import logging
 import re
 from collections.abc import Callable, Iterable, Mapping
-from urllib.parse import urlsplit
+from urllib.parse import quote, quote_plus, urlsplit
 
 from eeg_connection_hub.config import LOOPBACK_HOSTS, HubConfig
 
 _TOKEN_QUERY_RE = re.compile(r"(?i)([?&]token=)[A-Za-z0-9._~+/%=-]+")
 _BEARER_RE = re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]+")
+_PERCENT_ESC = re.compile(r"%[0-9A-Fa-f]{2}")
 REDACTED = "***"
+# Mixed-case percent-encoding blows up as 2**n. Past this, keep the fully
+# upper and fully lower hex spellings, which are what encoders actually emit.
+_MAX_PERCENT_VARIANTS = 6
 
 
 def _strip_brackets(host: str) -> str:
@@ -135,13 +139,75 @@ def extract_token(
     return (q, True) if q else (None, False)
 
 
+def _percent_case_variants(encoded: str) -> list[str]:
+    """Upper/lower hex spellings of one percent-encoded string."""
+    pieces = _PERCENT_ESC.split(encoded)
+    escapes = _PERCENT_ESC.findall(encoded)
+    if not escapes:
+        return [encoded]
+    if len(escapes) > _MAX_PERCENT_VARIANTS:
+        lower = _PERCENT_ESC.sub(lambda match: match.group(0).lower(), encoded)
+        upper = _PERCENT_ESC.sub(lambda match: match.group(0).upper(), encoded)
+        return list(dict.fromkeys((encoded, lower, upper)))
+    variants: list[str] = []
+    for mask in range(1 << len(escapes)):
+        parts: list[str] = []
+        for index, piece in enumerate(pieces[:-1]):
+            parts.append(piece)
+            esc = escapes[index]
+            parts.append(esc.upper() if mask & (1 << index) else esc.lower())
+        parts.append(pieces[-1])
+        variants.append("".join(parts))
+    return variants
+
+
+def configured_token_forms(secret: str) -> list[str]:
+    """Raw configured token, then its percent-encoded forms, longest first.
+
+    Encodings cover ``quote`` / ``quote_plus`` (with and without ``/`` left
+    intact), a second encoding pass, and both hex cases. The raw value is
+    always included so a later pattern pass cannot leave a suffix behind.
+    """
+    if not secret:
+        return []
+    found: dict[str, None] = {secret: None}
+    seeds = (
+        quote(secret, safe=""),
+        quote(secret, safe="/"),
+        quote_plus(secret, safe=""),
+        quote_plus(secret, safe="/"),
+    )
+    encoded_seeds = (*seeds, quote(seeds[0], safe=""))
+    for seed in encoded_seeds:
+        for variant in _percent_case_variants(seed):
+            found.setdefault(variant, None)
+    rest = [item for item in found if item != secret]
+    rest.sort(key=len, reverse=True)
+    return [secret, *rest]
+
+
 def redact(text: str, secrets: Iterable[str] = ()) -> str:
-    """Remove access tokens from free text / URLs."""
-    out = _TOKEN_QUERY_RE.sub(lambda m: m.group(1) + REDACTED, text)
-    out = _BEARER_RE.sub(lambda m: m.group(1) + REDACTED, out)
+    """Remove access tokens from free text / URLs.
+
+    The exact configured token and its percent-encoded forms are replaced
+    before the ``token=`` and ``Bearer`` patterns. Patterns alone stop at
+    characters such as ``!``, ``:``, and ``,``, which would leave the rest of
+    the token in a header dump or a ``?token=`` line.
+    """
+    forms: list[str] = []
+    seen: set[str] = set()
     for secret in secrets:
-        if secret:
-            out = out.replace(secret, REDACTED)
+        for form in configured_token_forms(secret):
+            if form not in seen:
+                seen.add(form)
+                forms.append(form)
+    forms.sort(key=len, reverse=True)
+    out = text
+    for form in forms:
+        if form:
+            out = out.replace(form, REDACTED)
+    out = _TOKEN_QUERY_RE.sub(lambda m: m.group(1) + REDACTED, out)
+    out = _BEARER_RE.sub(lambda m: m.group(1) + REDACTED, out)
     return out
 
 

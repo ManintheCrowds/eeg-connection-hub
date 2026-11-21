@@ -73,7 +73,7 @@ Inner payload remains **`enthea.muse.features/v1`** for compatibility. Hub wraps
 - Front-door checks (`security.py`, wired via websockets `process_request` and the HTTP handler), applied before auth:
   - `Host` allowlist (DNS rebinding): loopback names always; in LAN mode also the bound host, IP literals, and `--allow-host` names. Else 403.
   - `Origin` allowlist: absent (non-browser) or loopback origins; others need `--allow-origin`. Else 403.
-- Logs: a handler-level filter redacts `?token=…`, `Bearer …`, and the literal token from all records, including websockets debug output and exception tracebacks (`exc_info`, `exc_text`, `stack_info`) under `-v`.
+- Logs: a handler-level filter redacts the configured token (including percent-encoded forms) before the `?token=…` and `Bearer …` patterns. That covers websockets debug output and exception tracebacks (`exc_info`, `exc_text`, `stack_info`) under `-v`.
 - Raw EEG: disabled unless `--enable-raw-eeg`; loopback-only; excluded from logs.
 - Internet multi-tenancy: **out of scope** for beta.
 
