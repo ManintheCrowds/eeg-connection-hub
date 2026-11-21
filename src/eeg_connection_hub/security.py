@@ -145,23 +145,55 @@ def redact(text: str, secrets: Iterable[str] = ()) -> str:
     return out
 
 
+# Formatter used only to render exc_info before it is discarded. The logging
+# Formatter caches that rendering on exc_text and will not rebuild it while
+# exc_info is cleared, so the token cannot reappear from the traceback.
+_EXC_FORMATTER = logging.Formatter()
+
+
 class RedactingFilter(logging.Filter):
-    """Handler filter that scrubs tokens from every formatted record (incl. websockets debug logs)."""
+    """Handler filter that scrubs tokens from every formatted record (incl. websockets debug logs).
+
+    The message, ``exc_info`` / ``exc_text``, and ``stack_info`` are all cleaned.
+    websockets logs a malformed header as ``logger.debug(..., exc_info=True)``;
+    the token then sits in the ``ValueError`` traceback, not in the message.
+    """
 
     def __init__(self, secrets: Iterable[str] = ()) -> None:
         super().__init__()
         self.secrets = [s for s in secrets if s]
 
     def filter(self, record: logging.LogRecord) -> bool:
+        self._redact_message(record)
+        self._redact_exception(record)
+        self._redact_stack(record)
+        return True
+
+    def _redact_message(self, record: logging.LogRecord) -> None:
         try:
             message = record.getMessage()
         except Exception:
-            return True
+            message = record.msg if isinstance(record.msg, str) else ""
         cleaned = redact(message, self.secrets)
         if cleaned != message:
             record.msg = cleaned
             record.args = None
-        return True
+
+    def _redact_exception(self, record: logging.LogRecord) -> None:
+        text = record.exc_text or ""
+        exc_info = record.exc_info
+        if not text and isinstance(exc_info, tuple) and exc_info[0] is not None:
+            text = _EXC_FORMATTER.formatException(exc_info)
+        if text:
+            record.exc_text = redact(text, self.secrets)
+        # Drop the live exception. A later Formatter.formatException(exc_info)
+        # would rebuild the traceback from the original ValueError, token and all.
+        if exc_info:
+            record.exc_info = None
+
+    def _redact_stack(self, record: logging.LogRecord) -> None:
+        if isinstance(record.stack_info, str) and record.stack_info:
+            record.stack_info = redact(record.stack_info, self.secrets)
 
 
 def install_log_redaction(secrets: Iterable[str] = ()) -> RedactingFilter:

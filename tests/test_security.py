@@ -170,6 +170,51 @@ def test_redacting_filter_scrubs_args() -> None:
     assert TOKEN not in stream.getvalue()
 
 
+def test_redacting_filter_scrubs_exc_info_exc_text_and_stack_info() -> None:
+    """The token in a traceback must not survive the filter, even when the message is clean."""
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    redactor = RedactingFilter([TOKEN])
+    handler.addFilter(redactor)
+    log = logging.getLogger("eeg_test_redact_exc")
+    log.addHandler(handler)
+    log.propagate = False
+    log.setLevel(logging.DEBUG)
+    try:
+        try:
+            raise ValueError(f"invalid HTTP header value: Bearer {TOKEN}")
+        except ValueError:
+            log.error("! no valid HTTP request", exc_info=True)
+            exc_info = sys.exc_info()
+        record = logging.LogRecord(
+            name="eeg_test_redact_exc",
+            level=logging.ERROR,
+            pathname=__file__,
+            lineno=1,
+            msg="cached",
+            args=(),
+            exc_info=exc_info,
+        )
+        record.exc_text = f"ValueError: Bearer {TOKEN}\n"
+        record.stack_info = f"Stack (most recent call last):\n  Authorization: Bearer {TOKEN}\n"
+        assert redactor.filter(record) is True
+        assert record.exc_text is not None and TOKEN not in record.exc_text
+        assert record.stack_info is not None and TOKEN not in record.stack_info
+        assert "***" in record.exc_text and "***" in record.stack_info
+        if record.exc_info:
+            rendered = logging.Formatter().formatException(record.exc_info)
+            assert TOKEN not in rendered
+    finally:
+        log.removeHandler(handler)
+        log.propagate = True
+    text = stream.getvalue()
+    assert "Traceback" in text
+    assert "invalid HTTP header value" in text
+    assert TOKEN not in text
+    assert "***" in text
+
+
 # ---------------------------------------------------------------- non-loopback bind refusal
 
 
@@ -343,4 +388,49 @@ async def test_token_absent_from_verbose_logs() -> None:
     text = stream.getvalue()
     assert "websockets" in text  # debug logs were actually produced
     assert "token=***" in text
+    assert TOKEN not in text
+
+
+async def test_ws_control_byte_authorization_traceback_is_redacted() -> None:
+    """A stray control byte in Authorization makes websockets raise ValueError(header).
+
+    Under ``-v`` that exception is logged with ``exc_info``. The token must not
+    appear in the traceback.
+    """
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+    root = logging.getLogger()
+    old_level = root.level
+    root.addHandler(handler)
+    root.setLevel(logging.DEBUG)
+    try:
+        cfg = _lan_config()
+        cli.install_log_redaction([cfg.access_token])
+        async with running_hub(cfg):
+            key = base64.b64encode(os.urandom(16)).decode()
+            request = (
+                "GET / HTTP/1.1\r\n"
+                f"Host: 127.0.0.1:{cfg.ws_port}\r\n"
+                f"Authorization: Bearer {TOKEN}\x01\r\n"
+                "Upgrade: websocket\r\n"
+                "Connection: Upgrade\r\n"
+                f"Sec-WebSocket-Key: {key}\r\n"
+                "Sec-WebSocket-Version: 13\r\n"
+                "\r\n"
+            )
+            reader, writer = await asyncio.open_connection("127.0.0.1", cfg.ws_port)
+            writer.write(request.encode("latin-1"))
+            await writer.drain()
+            await asyncio.wait_for(reader.read(4096), timeout=3.0)
+            writer.close()
+    finally:
+        root.removeHandler(handler)
+        root.setLevel(old_level)
+        for log_handler in root.handlers:
+            log_handler.filters = [flt for flt in log_handler.filters if not isinstance(flt, RedactingFilter)]
+    text = stream.getvalue()
+    assert "invalid HTTP header value" in text
+    assert "Traceback" in text
+    assert "***" in text
     assert TOKEN not in text
