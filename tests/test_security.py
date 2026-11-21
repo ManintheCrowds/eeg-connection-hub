@@ -306,6 +306,106 @@ def test_cli_bind_all_without_allow_lan_exits(capsys: pytest.CaptureFixture[str]
     assert "--allow-lan" in err and "0.0.0.0" in err
 
 
+def test_supplied_token_floor() -> None:
+    assert cli.supplied_token_error("") is None
+    assert cli.supplied_token_error("x" * (cli.MIN_ACCESS_TOKEN_LENGTH - 1))
+    assert cli.supplied_token_error("x" * cli.MIN_ACCESS_TOKEN_LENGTH) is None
+
+
+def test_cli_rejects_short_access_token(capsys: pytest.CaptureFixture[str]) -> None:
+    short = "s" * (cli.MIN_ACCESS_TOKEN_LENGTH - 1)
+    assert cli.main(["--access-token", short, "--synth", "1"]) == 2
+    err = capsys.readouterr().err
+    assert "Config error:" in err
+    assert str(cli.MIN_ACCESS_TOKEN_LENGTH) in err
+    assert "access token" in err
+    assert short not in err
+
+
+def test_cli_rejects_short_env_token(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    short = "e" * (cli.MIN_ACCESS_TOKEN_LENGTH - 1)
+    monkeypatch.setenv(cli.TOKEN_ENV, short)
+    assert cli.main(["--allow-lan", "--synth", "1"]) == 2
+    err = capsys.readouterr().err
+    assert str(cli.MIN_ACCESS_TOKEN_LENGTH) in err
+    assert short not in err
+
+
+def test_cli_accepts_minimum_length_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, int] = {}
+
+    async def fake_run(self: object) -> None:
+        seen["length"] = len(getattr(self, "config").access_token)
+
+    monkeypatch.setattr(cli.EEGConnectionHub, "run", fake_run)
+    token = "a" * cli.MIN_ACCESS_TOKEN_LENGTH
+    code = cli.main(
+        [
+            "--allow-lan",
+            "--access-token",
+            token,
+            "--synth",
+            "0",
+            "--ws-port",
+            str(_free_port()),
+            "--http-port",
+            str(_free_port()),
+        ]
+    )
+    assert code == 0
+    assert seen["length"] == cli.MIN_ACCESS_TOKEN_LENGTH
+
+
+def test_cli_flag_overrides_short_env_token(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv(cli.TOKEN_ENV, "e" * 8)
+
+    async def fake_run(self: object) -> None:
+        return None
+
+    monkeypatch.setattr(cli.EEGConnectionHub, "run", fake_run)
+    token = "b" * cli.MIN_ACCESS_TOKEN_LENGTH
+    code = cli.main(
+        [
+            "--access-token",
+            token,
+            "--ws-port",
+            str(_free_port()),
+            "--http-port",
+            str(_free_port()),
+        ]
+    )
+    assert code == 0
+    assert "access token must be" not in capsys.readouterr().err
+
+
+def test_cli_omitted_token_skips_strength_check(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.delenv(cli.TOKEN_ENV, raising=False)
+
+    async def fake_run(self: object) -> None:
+        assert len(getattr(self, "config").access_token) >= cli.MIN_ACCESS_TOKEN_LENGTH
+
+    monkeypatch.setattr(cli.EEGConnectionHub, "run", fake_run)
+    code = cli.main(
+        [
+            "--allow-lan",
+            "--synth",
+            "0",
+            "--ws-port",
+            str(_free_port()),
+            "--http-port",
+            str(_free_port()),
+        ]
+    )
+    assert code == 0
+    assert "access token must be" not in capsys.readouterr().err
+
+
 def test_cli_subprocess_exit_code() -> None:
     proc = subprocess.run(
         [sys.executable, "-m", "eeg_connection_hub.cli", "--host", "0.0.0.0", "--synth", "1"],
@@ -388,7 +488,7 @@ async def test_ws_query_token_still_works_but_warns(caplog: pytest.LogCaptureFix
     async with running_hub(cfg):
         async with websockets.connect(f"ws://127.0.0.1:{cfg.ws_port}?token={TOKEN}") as ws:
             assert "stream_id" in await _recv_envelope(ws)
-    assert any("deprecated" in r.getMessage() for r in caplog.records)
+    assert any("deprecated" in r.getMessage() and "0.2.0" in r.getMessage() for r in caplog.records)
     assert all(TOKEN not in r.getMessage() for r in caplog.records)
 
 

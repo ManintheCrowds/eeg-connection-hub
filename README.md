@@ -63,7 +63,7 @@ Local-first by default: loopback bind, no phone-home (see [PRIVACY.md](PRIVACY.m
 |------|---------|---------|
 | `--host` | `127.0.0.1` | Loopback bind; a non-loopback value without `--allow-lan` is a startup error |
 | `--allow-lan` | off | Bind `0.0.0.0` (or `--host`); requires an access token (auto-generated if omitted) |
-| `--access-token` | `$EEG_HUB_ACCESS_TOKEN` | LAN token; clients send `Authorization: Bearer <token>` (`?token=` still works but is deprecated) |
+| `--access-token` | `$EEG_HUB_ACCESS_TOKEN` | LAN token, at least 32 characters; clients send `Authorization: Bearer <token>` (`?token=` is deprecated and will be removed in 0.2.0) |
 | `--allow-origin ORIGIN` | — | Extra browser Origin allowed (repeatable). No-Origin clients and `http(s)://localhost`/`127.0.0.1`/`[::1]` (any port) always pass |
 | `--allow-host NAME` | — | Extra `Host` header name accepted, e.g. `labpc.local` (repeatable; DNS-rebinding guard) |
 | `--enable-raw-eeg` | off | Attach clipped raw window in envelope; loopback only; never logged |

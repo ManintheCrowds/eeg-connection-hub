@@ -15,6 +15,26 @@ from eeg_connection_hub.hub_server import EEGConnectionHub
 from eeg_connection_hub.security import install_log_redaction
 
 TOKEN_ENV = "EEG_HUB_ACCESS_TOKEN"
+# Operator-supplied tokens (flag or env). secrets.token_urlsafe(32) is 43
+# characters, so the auto-generated token is already above this floor.
+MIN_ACCESS_TOKEN_LENGTH = 32
+
+
+def supplied_token_error(token: str) -> str | None:
+    """Return a startup error when an operator-supplied token is too short.
+
+    An empty string means the operator did not supply one. LAN mode then
+    auto-generates a token that already meets the floor.
+    """
+    if not token:
+        return None
+    if len(token) < MIN_ACCESS_TOKEN_LENGTH:
+        return (
+            f"access token must be at least {MIN_ACCESS_TOKEN_LENGTH} characters "
+            f"(got {len(token)}). Set --access-token or ${TOKEN_ENV} to a long "
+            "random value. The auto-generated token already meets this floor."
+        )
+    return None
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -38,7 +58,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--access-token",
         default=os.environ.get(TOKEN_ENV, ""),
-        help=f"LAN access token (default: ${TOKEN_ENV}; auto-generated when --allow-lan and omitted)",
+        help=(
+            f"LAN access token (default: ${TOKEN_ENV}; minimum {MIN_ACCESS_TOKEN_LENGTH} "
+            "characters; auto-generated when --allow-lan and omitted)"
+        ),
     )
     parser.add_argument(
         "--allow-origin",
@@ -97,6 +120,10 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
     token_supplied = bool(args.access_token)
+    strength_error = supplied_token_error(args.access_token)
+    if strength_error:
+        print(f"Config error: {strength_error}", file=sys.stderr)
+        return 2
     try:
         config = HubConfig(
             host=host,

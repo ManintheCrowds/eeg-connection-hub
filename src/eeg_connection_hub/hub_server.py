@@ -375,7 +375,8 @@ class EEGConnectionHub:
             self._query_token_warned = True
             logger.warning(
                 "%s client sent the access token in the URL query (?token=); this is deprecated "
-                "and leaks into logs/history — use the 'Authorization: Bearer <token>' header",
+                "and will be removed in 0.2.0. It leaks into logs and history — "
+                "use the 'Authorization: Bearer <token>' header",
                 where,
             )
 

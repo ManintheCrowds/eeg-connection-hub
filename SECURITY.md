@@ -14,11 +14,11 @@ Local lab / LAN collaboration tool. **Not** hardened for internet exposure.
 Requires **both**:
 
 1. `--allow-lan` (binds `0.0.0.0`, or the given `--host`)
-2. An access token: `--access-token <secret>` or `$EEG_HUB_ACCESS_TOKEN` (preferred: keeps it out of `ps`). If omitted, one is auto-generated and printed once to stderr.
+2. An access token: `--access-token <secret>` or `$EEG_HUB_ACCESS_TOKEN` (preferred: keeps it out of `ps`). An operator-supplied token must be at least 32 characters; a shorter value is a startup error (exit 2). If omitted, one is auto-generated with `secrets.token_urlsafe(32)` (43 characters) and printed once to stderr.
 
 A non-loopback `--host` (e.g. `0.0.0.0`) without `--allow-lan` is a startup error (exit 2).
 
-Clients send `Authorization: Bearer <token>` on the WebSocket handshake and HTTP requests. The old `?token=` query parameter still works but is **deprecated** (URLs end up in logs, shell history, and proxies); the hub logs a one-time warning when it is used.
+Clients send `Authorization: Bearer <token>` on the WebSocket handshake and HTTP requests. The old `?token=` query parameter still works but is **deprecated and will be removed in 0.2.0** (URLs end up in logs, shell history, and proxies); the hub logs a one-time warning when it is used.
 
 Unauthorized clients receive HTTP 401 or WebSocket close `4401`.
 

@@ -8,7 +8,7 @@
 | Quality / artifact flags | Published | No raw samples |
 | Raw EEG samples | **Off** | Opt-in via `--enable-raw-eeg`; loopback only |
 | Session labels | Pseudonymous | `participant-NNN`; operator-assigned labels optional later |
-| Access tokens | LAN mode only | Printed once to stderr only when auto-generated; redacted from all logs (incl. `-v`) |
+| Access tokens | LAN mode only | Printed once to stderr only when auto-generated; operator-supplied tokens must be at least 32 characters; redacted from all logs (incl. `-v`) |
 
 ## Logging
 
