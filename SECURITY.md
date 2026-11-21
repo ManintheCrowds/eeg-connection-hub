@@ -14,7 +14,7 @@ Local lab / LAN collaboration tool. **Not** hardened for internet exposure.
 Requires **both**:
 
 1. `--allow-lan` (binds `0.0.0.0`, or the given `--host`)
-2. An access token: `--access-token <secret>` or `$EEG_HUB_ACCESS_TOKEN` (preferred: keeps it out of `ps`). An operator-supplied token must be at least 32 characters; a shorter value is a startup error (exit 2). If omitted, one is auto-generated with `secrets.token_urlsafe(32)` (43 characters) and printed once to stderr.
+2. An access token: `--access-token <secret>` or `$EEG_HUB_ACCESS_TOKEN` (preferred: keeps it out of `ps`). An operator-supplied token must be at least 32 characters; a shorter value is a startup error (exit 2). If omitted, one is auto-generated with `secrets.token_urlsafe(32)` (43 characters) and written to a mode-0600 file at `$XDG_STATE_HOME/eeg-connection-hub/access-token` (default `~/.local/state/eeg-connection-hub/access-token`; directory mode 0700). Startup prints only that path. The token is not written to stderr, so journald, Docker logs, and CI do not capture it. A token you pass yourself is never printed and is not written to that file. If the file cannot be created, startup exits 2 and still does not print the token.
 
 A non-loopback `--host` (e.g. `0.0.0.0`) without `--allow-lan` is a startup error (exit 2).
 

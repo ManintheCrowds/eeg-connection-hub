@@ -9,6 +9,7 @@ import asyncio
 import logging
 import os
 import sys
+from pathlib import Path
 
 from eeg_connection_hub.config import HubConfig, is_loopback_host
 from eeg_connection_hub.hub_server import EEGConnectionHub
@@ -35,6 +36,45 @@ def supplied_token_error(token: str) -> str | None:
             "random value. The auto-generated token already meets this floor."
         )
     return None
+
+
+def generated_token_path() -> Path:
+    """Path of the 0600 file that holds an auto-generated LAN token.
+
+    ``$XDG_STATE_HOME`` when set, otherwise ``~/.local/state``. Service managers
+    capture stderr (journald, Docker, CI), so the token itself is not printed.
+    """
+    raw = os.environ.get("XDG_STATE_HOME", "").strip()
+    base = Path(raw).expanduser() if raw else Path.home() / ".local" / "state"
+    return base / "eeg-connection-hub" / "access-token"
+
+
+def write_generated_token(token: str) -> Path:
+    """Write ``token`` to the state file (directory 0700, file 0600) and return the path."""
+    path = generated_token_path()
+    directory = path.parent
+    directory.mkdir(parents=True, exist_ok=True)
+    os.chmod(directory, 0o700)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        os.write(fd, token.encode("utf-8") + b"\n")
+    except OSError:
+        os.close(fd)
+        os.unlink(temporary)
+        raise
+    os.close(fd)
+    try:
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, path)
+        os.chmod(path, 0o600)
+    except OSError:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+        raise
+    return path
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -145,10 +185,22 @@ def main(argv: list[str] | None = None) -> int:
 
     install_log_redaction([config.access_token])
     if config.allow_lan and config.access_token and not token_supplied:
-        # One-time, deliberate disclosure of an auto-generated token to the operator's terminal
-        # (stderr, not the logging system). Pass --access-token / $EEG_HUB_ACCESS_TOKEN to avoid it.
-        print(f"LAN access token (auto-generated): {config.access_token}", file=sys.stderr)
-        print("Clients: send header 'Authorization: Bearer <token>'.", file=sys.stderr)
+        # stderr is the journald/Docker/CI log. Never print the token; the operator
+        # reads the 0600 file. A token supplied via the flag or the env var is not written.
+        try:
+            token_path = write_generated_token(config.access_token)
+        except OSError as exc:
+            print(
+                "Config error: could not store the auto-generated LAN access token "
+                f"({exc.__class__.__name__}: {exc}). The token was not printed.",
+                file=sys.stderr,
+            )
+            return 2
+        print(f"LAN access token written to {token_path} (mode 0600).", file=sys.stderr)
+        print(
+            "Clients: send header 'Authorization: Bearer <token>' using the value in that file.",
+            file=sys.stderr,
+        )
 
     hub = EEGConnectionHub(config)
     try:

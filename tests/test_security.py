@@ -383,9 +383,10 @@ def test_cli_flag_overrides_short_env_token(
 
 
 def test_cli_omitted_token_skips_strength_check(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch, tmp_path: object, capsys: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.delenv(cli.TOKEN_ENV, raising=False)
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
 
     async def fake_run(self: object) -> None:
         assert len(getattr(self, "config").access_token) >= cli.MIN_ACCESS_TOKEN_LENGTH
@@ -404,6 +405,128 @@ def test_cli_omitted_token_skips_strength_check(
     )
     assert code == 0
     assert "access token must be" not in capsys.readouterr().err
+
+
+def _run_allow_lan(monkeypatch: pytest.MonkeyPatch, extra: list[str] | None = None) -> int:
+    async def fake_run(self: object) -> None:
+        return None
+
+    monkeypatch.setattr(cli.EEGConnectionHub, "run", fake_run)
+    args = [
+        "--allow-lan",
+        "--synth",
+        "0",
+        "--ws-port",
+        str(_free_port()),
+        "--http-port",
+        str(_free_port()),
+        *(extra or []),
+    ]
+    return cli.main(args)
+
+
+def test_generated_token_is_written_not_printed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: object, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    monkeypatch.delenv(cli.TOKEN_ENV, raising=False)
+    seen: dict[str, str] = {}
+
+    async def fake_run(self: object) -> None:
+        seen["token"] = getattr(self, "config").access_token
+
+    monkeypatch.setattr(cli.EEGConnectionHub, "run", fake_run)
+    code = cli.main(
+        [
+            "--allow-lan",
+            "--synth",
+            "0",
+            "--ws-port",
+            str(_free_port()),
+            "--http-port",
+            str(_free_port()),
+        ]
+    )
+    assert code == 0
+    token = seen["token"]
+    err = capsys.readouterr().err
+    path = cli.generated_token_path()
+    assert token not in err
+    assert str(path) in err
+    assert "mode 0600" in err
+    assert path.read_text(encoding="utf-8") == token + "\n"
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert path.parent.stat().st_mode & 0o777 == 0o700
+
+
+def test_generated_token_defaults_to_home_state_dir(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: object, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.delenv("XDG_STATE_HOME", raising=False)
+    monkeypatch.delenv(cli.TOKEN_ENV, raising=False)
+    monkeypatch.setattr(cli.Path, "home", lambda: tmp_path)
+    seen: dict[str, str] = {}
+
+    async def fake_run(self: object) -> None:
+        seen["token"] = getattr(self, "config").access_token
+
+    monkeypatch.setattr(cli.EEGConnectionHub, "run", fake_run)
+    code = cli.main(
+        [
+            "--allow-lan",
+            "--synth",
+            "0",
+            "--ws-port",
+            str(_free_port()),
+            "--http-port",
+            str(_free_port()),
+        ]
+    )
+    assert code == 0
+    path = tmp_path / ".local" / "state" / "eeg-connection-hub" / "access-token"
+    assert path.read_text(encoding="utf-8") == seen["token"] + "\n"
+    err = capsys.readouterr().err
+    assert seen["token"] not in err
+    assert str(path) in err
+
+
+def test_supplied_token_is_not_stored(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: object, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    token = "c" * cli.MIN_ACCESS_TOKEN_LENGTH
+    code = _run_allow_lan(monkeypatch, ["--access-token", token])
+    assert code == 0
+    err = capsys.readouterr().err
+    assert token not in err
+    assert not (tmp_path / "eeg-connection-hub" / "access-token").exists()
+
+
+def test_generated_token_store_failure_does_not_print_it(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: object, capsys: pytest.CaptureFixture[str]
+) -> None:
+    blocker = tmp_path / "not-a-directory"
+    blocker.write_text("x", encoding="utf-8")
+    monkeypatch.setenv("XDG_STATE_HOME", str(blocker))
+    monkeypatch.delenv(cli.TOKEN_ENV, raising=False)
+    known = "k" * (cli.MIN_ACCESS_TOKEN_LENGTH + 11)
+    monkeypatch.setattr("eeg_connection_hub.config.secrets.token_urlsafe", lambda _nbytes: known)
+    code = cli.main(
+        [
+            "--allow-lan",
+            "--synth",
+            "0",
+            "--ws-port",
+            str(_free_port()),
+            "--http-port",
+            str(_free_port()),
+        ]
+    )
+    assert code == 2
+    err = capsys.readouterr().err
+    assert known not in err
+    assert "could not store" in err
+    assert "not printed" in err
 
 
 def test_cli_subprocess_exit_code() -> None:
