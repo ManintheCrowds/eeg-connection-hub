@@ -8,10 +8,11 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
 
 
-async def consume(uri: str, stream_id: str | None) -> None:
+async def consume(uri: str, stream_id: str | None, token: str = "") -> None:
     try:
         import websockets
     except ImportError:
@@ -22,8 +23,13 @@ async def consume(uri: str, stream_id: str | None) -> None:
         sep = "&" if "?" in uri else "?"
         uri = f"{uri}{sep}stream_id={stream_id}"
 
-    print(f"Connecting to {uri}", file=sys.stderr)
-    async with websockets.connect(uri) as ws:
+    print(f"Connecting to {uri}", file=sys.stderr)  # token travels in a header, never in the URL
+    headers = {"Authorization": f"Bearer {token}"} if token else None
+    try:
+        connect = websockets.connect(uri, additional_headers=headers)
+    except TypeError:  # websockets < 14 legacy client
+        connect = websockets.connect(uri, extra_headers=headers)
+    async with connect as ws:
         async for raw in ws:
             envelope = json.loads(raw)
             features = envelope.get("features", {})
@@ -45,13 +51,13 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="ENTHEA-style hub consumer example")
     parser.add_argument("--uri", default="ws://127.0.0.1:8765")
     parser.add_argument("--stream-id", default="", help="Optional stream filter")
-    parser.add_argument("--token", default="", help="LAN access token when required")
+    parser.add_argument(
+        "--token",
+        default=os.environ.get("EEG_HUB_ACCESS_TOKEN", ""),
+        help="LAN access token when required (default: $EEG_HUB_ACCESS_TOKEN); sent as a Bearer header",
+    )
     args = parser.parse_args()
-    uri = args.uri
-    if args.token:
-        sep = "&" if "?" in uri else "?"
-        uri = f"{uri}{sep}token={args.token}"
-    asyncio.run(consume(uri, args.stream_id or None))
+    asyncio.run(consume(args.uri, args.stream_id or None, args.token))
     return 0
 
 

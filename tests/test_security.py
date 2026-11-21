@@ -1,0 +1,833 @@
+# PURPOSE: Friday 3 privacy hardening — Origin allowlist, Host check (DNS rebinding), Bearer token,
+#          log redaction, and non-loopback bind refusal. Synthetic streams only.
+from __future__ import annotations
+
+import asyncio
+import base64
+import io
+import json
+import logging
+import os
+import subprocess
+import sys
+from types import SimpleNamespace
+from urllib.parse import quote
+
+import pytest
+import websockets
+from test_integration import _free_port, _recv_envelope, running_hub
+from websockets.datastructures import Headers
+from websockets.exceptions import ConnectionClosed, InvalidStatus
+
+from eeg_connection_hub import cli
+from eeg_connection_hub.config import HubConfig
+from eeg_connection_hub.hub_server import EEGConnectionHub
+from eeg_connection_hub.security import (
+    RedactingFilter,
+    bearer_token,
+    extract_token,
+    host_allowed,
+    origin_allowed,
+    parse_host_header,
+    redact,
+)
+
+TOKEN = "unit-test-token-Zx9qP"  # synthetic test value, not a real secret
+
+
+def _punct_token() -> str:
+    """Runtime token. ``!``, ``:``, and ``,`` sit outside the bearer/query patterns."""
+    alphabet = "abcdefghijklmnop"
+    core = "".join(alphabet[byte % len(alphabet)] for byte in os.urandom(12))
+    return core[:4] + "!" + core[4:8] + ":" + core[8:] + ",z"
+
+
+def _lower_percent_hex(encoded: str) -> str:
+    out: list[str] = []
+    index = 0
+    while index < len(encoded):
+        if encoded[index] == "%" and index + 2 < len(encoded):
+            out.append(encoded[index : index + 3].lower())
+            index += 3
+        else:
+            out.append(encoded[index])
+            index += 1
+    return "".join(out)
+
+
+def _loopback_config(**kw: object) -> HubConfig:
+    return HubConfig(host="127.0.0.1", ws_port=_free_port(), http_port=_free_port(), synth_streams=1, **kw)
+
+
+def _lan_config(**kw: object) -> HubConfig:
+    return HubConfig(
+        host="0.0.0.0",
+        ws_port=_free_port(),
+        http_port=_free_port(),
+        allow_lan=True,
+        access_token=TOKEN,
+        synth_streams=1,
+        **kw,
+    )
+
+
+async def _raw_http(port: int, request: str) -> tuple[int, bytes]:
+    reader, writer = await asyncio.open_connection("127.0.0.1", port)
+    writer.write(request.encode("latin-1"))
+    await writer.drain()
+    data = await asyncio.wait_for(reader.read(65536), timeout=3.0)
+    writer.close()
+    status = int(data.split(b" ", 2)[1])
+    return status, data.split(b"\r\n\r\n", 1)[1] if b"\r\n\r\n" in data else b""
+
+
+def _get(path: str, host: str | None = "127.0.0.1", extra: str = "") -> str:
+    host_line = f"Host: {host}\r\n" if host is not None else ""
+    return f"GET {path} HTTP/1.1\r\n{host_line}{extra}Connection: close\r\n\r\n"
+
+
+def _upgrade(host: str, origin: str | None = None) -> str:
+    origin_line = f"Origin: {origin}\r\n" if origin else ""
+    return (
+        "GET / HTTP/1.1\r\n"
+        f"Host: {host}\r\n{origin_line}"
+        "Upgrade: websocket\r\nConnection: Upgrade\r\n"
+        f"Sec-WebSocket-Key: {base64.b64encode(os.urandom(16)).decode()}\r\n"
+        "Sec-WebSocket-Version: 13\r\n\r\n"
+    )
+
+
+# ---------------------------------------------------------------- unit: parsing / policy
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("localhost", "localhost"),
+        ("LOCALHOST:8766", "localhost"),
+        ("127.0.0.1:1", "127.0.0.1"),
+        ("[::1]:8765", "::1"),
+        ("[::1]", "::1"),
+        ("evil.example", "evil.example"),
+        ("::1", None),
+        ("localhost:abc", None),
+        ("a b", None),
+        ("", None),
+        (None, None),
+    ],
+)
+def test_parse_host_header(value: str | None, expected: str | None) -> None:
+    assert parse_host_header(value) == expected
+
+
+def test_host_allowed_loopback_mode() -> None:
+    cfg = HubConfig()
+    for ok in ("localhost", "localhost:8766", "127.0.0.1:9", "[::1]:8765"):
+        assert host_allowed(cfg, ok), ok
+    for bad in ("evil.example", "evil.example:8766", "192.168.1.20", "localhost.evil.example", None):
+        assert not host_allowed(cfg, bad), bad
+
+
+def test_host_allowed_lan_mode_and_extra_hosts() -> None:
+    cfg = HubConfig(host="0.0.0.0", allow_lan=True, access_token=TOKEN, allow_hosts=("labpc.local",))
+    assert host_allowed(cfg, "192.168.1.20:8766")  # IP literal: not a rebinding vector
+    assert host_allowed(cfg, "[fe80::1]:8766")
+    assert host_allowed(cfg, "labpc.local:8766")
+    assert host_allowed(cfg, "localhost")
+    assert not host_allowed(cfg, "evil.example")
+    bound = HubConfig(host="192.168.1.20", allow_lan=True, access_token=TOKEN)
+    assert host_allowed(bound, "192.168.1.20:8765")
+
+
+def test_null_allow_origin_rejected(capsys: pytest.CaptureFixture[str]) -> None:
+    for value in ("null", "NULL", " null ", "null/"):
+        with pytest.raises(ValueError, match="null"):
+            HubConfig(allow_origins=(value,))
+    assert HubConfig(allow_origins=("https://app.example",)).allow_origins == ("https://app.example",)
+    assert cli.main(["--allow-origin", "null", "--allow-origin", "https://app.example", "--synth", "1"]) == 2
+    err = capsys.readouterr().err
+    assert "Config error:" in err and "null" in err
+
+
+def test_ws_hooks_reject_duplicate_host_and_origin() -> None:
+    hub = EEGConnectionHub(_loopback_config())
+
+    class _Conn:
+        def respond(self, status: object, text: str) -> tuple[object, str]:
+            return status, text
+
+    duplicate_host = Headers([("Host", "127.0.0.1"), ("Host", "evil.example")])
+    same_host_twice = Headers([("Host", "127.0.0.1"), ("Host", "127.0.0.1")])
+    duplicate_origin = Headers(
+        [
+            ("Host", "127.0.0.1"),
+            ("Origin", "http://localhost"),
+            ("Origin", "https://evil.example"),
+        ]
+    )
+    conn = _Conn()
+    for headers, reason in (
+        (duplicate_host, "duplicate host"),
+        (same_host_twice, "duplicate host"),
+        (duplicate_origin, "duplicate origin"),
+    ):
+        new = hub.process_request_new(conn, SimpleNamespace(headers=headers))
+        legacy = hub.process_request_legacy("/", headers)
+        assert new is not None and legacy is not None
+        assert int(new[0]) == int(legacy[0]) == 400
+        assert reason in new[1]
+        assert reason.encode() in legacy[2]
+    bad_host = Headers([("Host", "evil.example")])
+    forbidden = hub.process_request_new(conn, SimpleNamespace(headers=bad_host))
+    legacy_forbidden = hub.process_request_legacy("/", bad_host)
+    assert forbidden is not None and legacy_forbidden is not None
+    assert int(forbidden[0]) == int(legacy_forbidden[0]) == 403
+    ok = Headers([("Host", "127.0.0.1")])
+    assert hub.process_request_new(conn, SimpleNamespace(headers=ok)) is None
+    assert hub.process_request_legacy("/", ok) is None
+
+
+def test_origin_policy() -> None:
+    cfg = HubConfig()
+    assert origin_allowed(cfg, None)
+    for ok in ("http://localhost", "http://localhost:3000", "http://127.0.0.1:5173", "http://[::1]:8080"):
+        assert origin_allowed(cfg, ok), ok
+    for bad in (
+        "https://evil.example",
+        "http://localhost.evil.example",
+        "http://127.0.0.1.nip.io",
+        "null",
+        "file://",
+        "http://localhost:3000/path",
+    ):
+        assert not origin_allowed(cfg, bad), bad
+    extended = HubConfig(allow_origins=("https://app.example/",))
+    assert origin_allowed(extended, "https://APP.example")
+    assert not origin_allowed(extended, "https://app.example:8443")
+
+
+def test_token_extraction_prefers_bearer() -> None:
+    assert bearer_token("Bearer abc") == "abc"
+    assert bearer_token("bearer   abc ") == "abc"
+    assert bearer_token("Basic abc") is None
+    assert bearer_token("Bearer ") is None
+    headers = {"Authorization": "Bearer hdr"}
+    assert extract_token(headers.get, {"token": ["q"]}) == ("hdr", False)
+    assert extract_token({}.get, {"token": ["q"]}) == ("q", True)
+    assert extract_token({}.get, {}) == (None, False)
+
+
+def test_redact_helpers() -> None:
+    text = f"GET /?stream_id=a&token={TOKEN}&x=1 Authorization: Bearer {TOKEN}"
+    out = redact(text)
+    assert TOKEN not in out
+    assert "token=***&x=1" in out and "Bearer ***" in out
+    assert redact(f"value {TOKEN} here", [TOKEN]) == "value *** here"
+    hint = "URL query (?token=); use the 'Authorization: Bearer <token>' header"
+    assert redact(hint) == hint  # placeholders in our own warning stay readable
+
+
+def test_redact_exact_token_before_patterns_and_percent_forms() -> None:
+    """'!', ':', ',' used to survive as a suffix; percent-encoding must go too."""
+    token = _punct_token()
+    tail = token.split("!", 1)[1]
+    assert ":" in tail and "," in tail
+    header = f"> Authorization: Bearer {token}\r\n"
+    query = f"< GET /health?token={token}&x=1 HTTP/1.1"
+    for text in (header, query):
+        out = redact(text, [token])
+        assert token not in out
+        assert tail not in out
+        assert "***" in out
+    encoded = quote(token, safe="")
+    assert "%" in encoded and token not in encoded
+    outside = f"note {encoded} end"
+    out = redact(outside, [token])
+    assert encoded not in out and token not in out and "***" in out
+    lowered = _lower_percent_hex(encoded)
+    assert lowered != encoded
+    out = redact(f"cache {lowered}", [token])
+    assert lowered not in out and "***" in out
+    out = redact(f"GET /?token={encoded}&x=1", [token])
+    assert encoded not in out and token not in out
+    doubled = quote(encoded, safe="")
+    assert doubled != encoded
+    out = redact(f"dbl {doubled}", [token])
+    assert doubled not in out and "***" in out
+
+
+def test_filter_redacts_punctuated_token_in_header_dump() -> None:
+    token = _punct_token()
+    tail = token.split("!", 1)[1]
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.addFilter(RedactingFilter([token]))
+    log = logging.getLogger("eeg_test_redact_punct")
+    log.addHandler(handler)
+    log.propagate = False
+    log.setLevel(logging.DEBUG)
+    try:
+        log.debug("> Authorization: Bearer %s", token)
+        log.debug("< GET /?token=%s HTTP/1.1", token)
+        encoded = quote(token, safe="")
+        log.debug("path %s", encoded)
+    finally:
+        log.removeHandler(handler)
+        log.propagate = True
+    text = stream.getvalue()
+    assert token not in text
+    assert tail not in text
+    assert encoded not in text
+    assert "***" in text
+
+
+def test_redacting_filter_scrubs_args() -> None:
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.addFilter(RedactingFilter([TOKEN]))
+    log = logging.getLogger("eeg_test_redact")
+    log.addHandler(handler)
+    log.setLevel(logging.DEBUG)
+    try:
+        log.debug("< GET %s HTTP/1.1", f"/?token={TOKEN}")
+        log.debug("secret=%s", TOKEN)
+    finally:
+        log.removeHandler(handler)
+    assert TOKEN not in stream.getvalue()
+
+
+def test_redacting_filter_scrubs_exc_info_exc_text_and_stack_info() -> None:
+    """The token in a traceback must not survive the filter, even when the message is clean."""
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    redactor = RedactingFilter([TOKEN])
+    handler.addFilter(redactor)
+    log = logging.getLogger("eeg_test_redact_exc")
+    log.addHandler(handler)
+    log.propagate = False
+    log.setLevel(logging.DEBUG)
+    try:
+        try:
+            raise ValueError(f"invalid HTTP header value: Bearer {TOKEN}")
+        except ValueError:
+            log.error("! no valid HTTP request", exc_info=True)
+            exc_info = sys.exc_info()
+        record = logging.LogRecord(
+            name="eeg_test_redact_exc",
+            level=logging.ERROR,
+            pathname=__file__,
+            lineno=1,
+            msg="cached",
+            args=(),
+            exc_info=exc_info,
+        )
+        record.exc_text = f"ValueError: Bearer {TOKEN}\n"
+        record.stack_info = f"Stack (most recent call last):\n  Authorization: Bearer {TOKEN}\n"
+        assert redactor.filter(record) is True
+        assert record.exc_text is not None and TOKEN not in record.exc_text
+        assert record.stack_info is not None and TOKEN not in record.stack_info
+        assert "***" in record.exc_text and "***" in record.stack_info
+        if record.exc_info:
+            rendered = logging.Formatter().formatException(record.exc_info)
+            assert TOKEN not in rendered
+    finally:
+        log.removeHandler(handler)
+        log.propagate = True
+    text = stream.getvalue()
+    assert "Traceback" in text
+    assert "invalid HTTP header value" in text
+    assert TOKEN not in text
+    assert "***" in text
+
+
+# ---------------------------------------------------------------- non-loopback bind refusal
+
+
+def test_config_rejects_non_loopback_without_allow_lan() -> None:
+    for host in ("0.0.0.0", "::", "192.168.1.20"):
+        with pytest.raises(ValueError, match="allow-lan"):
+            HubConfig(host=host)
+    assert HubConfig(host="::1").host == "::1"
+
+
+def test_cli_bind_all_without_allow_lan_exits(capsys: pytest.CaptureFixture[str]) -> None:
+    assert cli.main(["--host", "0.0.0.0", "--synth", "1"]) == 2
+    err = capsys.readouterr().err
+    assert "--allow-lan" in err and "0.0.0.0" in err
+
+
+def test_supplied_token_floor() -> None:
+    assert cli.supplied_token_error("") is None
+    assert cli.supplied_token_error("x" * (cli.MIN_ACCESS_TOKEN_LENGTH - 1))
+    assert cli.supplied_token_error("x" * cli.MIN_ACCESS_TOKEN_LENGTH) is None
+
+
+def test_cli_rejects_short_access_token(capsys: pytest.CaptureFixture[str]) -> None:
+    short = "s" * (cli.MIN_ACCESS_TOKEN_LENGTH - 1)
+    assert cli.main(["--access-token", short, "--synth", "1"]) == 2
+    err = capsys.readouterr().err
+    assert "Config error:" in err
+    assert str(cli.MIN_ACCESS_TOKEN_LENGTH) in err
+    assert "access token" in err
+    assert short not in err
+
+
+def test_cli_rejects_short_env_token(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    short = "e" * (cli.MIN_ACCESS_TOKEN_LENGTH - 1)
+    monkeypatch.setenv(cli.TOKEN_ENV, short)
+    assert cli.main(["--allow-lan", "--synth", "1"]) == 2
+    err = capsys.readouterr().err
+    assert str(cli.MIN_ACCESS_TOKEN_LENGTH) in err
+    assert short not in err
+
+
+def test_cli_accepts_minimum_length_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, int] = {}
+
+    async def fake_run(self: object) -> None:
+        seen["length"] = len(getattr(self, "config").access_token)
+
+    monkeypatch.setattr(cli.EEGConnectionHub, "run", fake_run)
+    token = "a" * cli.MIN_ACCESS_TOKEN_LENGTH
+    code = cli.main(
+        [
+            "--allow-lan",
+            "--access-token",
+            token,
+            "--synth",
+            "0",
+            "--ws-port",
+            str(_free_port()),
+            "--http-port",
+            str(_free_port()),
+        ]
+    )
+    assert code == 0
+    assert seen["length"] == cli.MIN_ACCESS_TOKEN_LENGTH
+
+
+def test_cli_flag_overrides_short_env_token(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv(cli.TOKEN_ENV, "e" * 8)
+
+    async def fake_run(self: object) -> None:
+        return None
+
+    monkeypatch.setattr(cli.EEGConnectionHub, "run", fake_run)
+    token = "b" * cli.MIN_ACCESS_TOKEN_LENGTH
+    code = cli.main(
+        [
+            "--access-token",
+            token,
+            "--ws-port",
+            str(_free_port()),
+            "--http-port",
+            str(_free_port()),
+        ]
+    )
+    assert code == 0
+    assert "access token must be" not in capsys.readouterr().err
+
+
+def test_cli_omitted_token_skips_strength_check(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: object, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.delenv(cli.TOKEN_ENV, raising=False)
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+
+    async def fake_run(self: object) -> None:
+        assert len(getattr(self, "config").access_token) >= cli.MIN_ACCESS_TOKEN_LENGTH
+
+    monkeypatch.setattr(cli.EEGConnectionHub, "run", fake_run)
+    code = cli.main(
+        [
+            "--allow-lan",
+            "--synth",
+            "0",
+            "--ws-port",
+            str(_free_port()),
+            "--http-port",
+            str(_free_port()),
+        ]
+    )
+    assert code == 0
+    assert "access token must be" not in capsys.readouterr().err
+
+
+def _run_allow_lan(monkeypatch: pytest.MonkeyPatch, extra: list[str] | None = None) -> int:
+    async def fake_run(self: object) -> None:
+        return None
+
+    monkeypatch.setattr(cli.EEGConnectionHub, "run", fake_run)
+    args = [
+        "--allow-lan",
+        "--synth",
+        "0",
+        "--ws-port",
+        str(_free_port()),
+        "--http-port",
+        str(_free_port()),
+        *(extra or []),
+    ]
+    return cli.main(args)
+
+
+def test_generated_token_is_written_not_printed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: object, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    monkeypatch.delenv(cli.TOKEN_ENV, raising=False)
+    seen: dict[str, str] = {}
+
+    async def fake_run(self: object) -> None:
+        seen["token"] = getattr(self, "config").access_token
+
+    monkeypatch.setattr(cli.EEGConnectionHub, "run", fake_run)
+    code = cli.main(
+        [
+            "--allow-lan",
+            "--synth",
+            "0",
+            "--ws-port",
+            str(_free_port()),
+            "--http-port",
+            str(_free_port()),
+        ]
+    )
+    assert code == 0
+    token = seen["token"]
+    err = capsys.readouterr().err
+    path = cli.generated_token_path()
+    assert token not in err
+    assert str(path) in err
+    assert "mode 0600" in err
+    assert path.read_text(encoding="utf-8") == token + "\n"
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert path.parent.stat().st_mode & 0o777 == 0o700
+
+
+def test_generated_token_defaults_to_home_state_dir(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: object, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.delenv("XDG_STATE_HOME", raising=False)
+    monkeypatch.delenv(cli.TOKEN_ENV, raising=False)
+    monkeypatch.setattr(cli.Path, "home", lambda: tmp_path)
+    seen: dict[str, str] = {}
+
+    async def fake_run(self: object) -> None:
+        seen["token"] = getattr(self, "config").access_token
+
+    monkeypatch.setattr(cli.EEGConnectionHub, "run", fake_run)
+    code = cli.main(
+        [
+            "--allow-lan",
+            "--synth",
+            "0",
+            "--ws-port",
+            str(_free_port()),
+            "--http-port",
+            str(_free_port()),
+        ]
+    )
+    assert code == 0
+    path = tmp_path / ".local" / "state" / "eeg-connection-hub" / "access-token"
+    assert path.read_text(encoding="utf-8") == seen["token"] + "\n"
+    err = capsys.readouterr().err
+    assert seen["token"] not in err
+    assert str(path) in err
+
+
+def test_supplied_token_is_not_stored(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: object, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    token = "c" * cli.MIN_ACCESS_TOKEN_LENGTH
+    code = _run_allow_lan(monkeypatch, ["--access-token", token])
+    assert code == 0
+    err = capsys.readouterr().err
+    assert token not in err
+    assert not (tmp_path / "eeg-connection-hub" / "access-token").exists()
+
+
+def test_generated_token_store_failure_does_not_print_it(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: object, capsys: pytest.CaptureFixture[str]
+) -> None:
+    blocker = tmp_path / "not-a-directory"
+    blocker.write_text("x", encoding="utf-8")
+    monkeypatch.setenv("XDG_STATE_HOME", str(blocker))
+    monkeypatch.delenv(cli.TOKEN_ENV, raising=False)
+    known = "k" * (cli.MIN_ACCESS_TOKEN_LENGTH + 11)
+    monkeypatch.setattr("eeg_connection_hub.config.secrets.token_urlsafe", lambda _nbytes: known)
+    code = cli.main(
+        [
+            "--allow-lan",
+            "--synth",
+            "0",
+            "--ws-port",
+            str(_free_port()),
+            "--http-port",
+            str(_free_port()),
+        ]
+    )
+    assert code == 2
+    err = capsys.readouterr().err
+    assert known not in err
+    assert "could not store" in err
+    assert "not printed" in err
+
+
+def test_cli_subprocess_exit_code() -> None:
+    proc = subprocess.run(
+        [sys.executable, "-m", "eeg_connection_hub.cli", "--host", "0.0.0.0", "--synth", "1"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert proc.returncode != 0
+    assert "--allow-lan" in proc.stderr
+
+
+# ---------------------------------------------------------------- integration: WebSocket
+
+
+async def test_ws_foreign_origin_rejected() -> None:
+    cfg = _loopback_config()
+    async with running_hub(cfg):
+        with pytest.raises(InvalidStatus) as exc:
+            async with websockets.connect(f"ws://127.0.0.1:{cfg.ws_port}", origin="https://evil.example"):
+                pass
+        assert exc.value.response.status_code == 403
+
+
+async def test_ws_loopback_origin_allowed() -> None:
+    cfg = _loopback_config()
+    async with running_hub(cfg):
+        origin = f"http://localhost:{cfg.http_port}"
+        async with websockets.connect(f"ws://127.0.0.1:{cfg.ws_port}", origin=origin) as ws:
+            msg = await _recv_envelope(ws)
+            assert msg["hub_schema"] == "eeg-connection-hub.envelope/v1"
+
+
+async def test_ws_no_origin_allowed() -> None:
+    cfg = _loopback_config()
+    async with running_hub(cfg):
+        async with websockets.connect(f"ws://127.0.0.1:{cfg.ws_port}") as ws:
+            assert "stream_id" in await _recv_envelope(ws)
+
+
+async def test_ws_allow_origin_flag_extends_list() -> None:
+    cfg = _loopback_config(allow_origins=("https://app.example",))
+    async with running_hub(cfg):
+        async with websockets.connect(f"ws://127.0.0.1:{cfg.ws_port}", origin="https://app.example") as ws:
+            assert "stream_id" in await _recv_envelope(ws)
+
+
+async def test_ws_rebinding_host_rejected() -> None:
+    cfg = _loopback_config()
+    async with running_hub(cfg):
+        status, _ = await _raw_http(cfg.ws_port, _upgrade(f"evil.example:{cfg.ws_port}"))
+        assert status == 403
+        status, _ = await _raw_http(cfg.ws_port, _upgrade(f"127.0.0.1:{cfg.ws_port}"))
+        assert status == 101
+
+
+async def test_ws_bearer_header_accepted() -> None:
+    cfg = _lan_config()
+    async with running_hub(cfg):
+        async with websockets.connect(
+            f"ws://127.0.0.1:{cfg.ws_port}",
+            additional_headers={"Authorization": f"Bearer {TOKEN}"},
+        ) as ws:
+            assert "stream_id" in await _recv_envelope(ws)
+
+
+@pytest.mark.parametrize("auth", [None, "Bearer wrong-token"])
+async def test_ws_missing_or_wrong_token_closes_4401(auth: str | None) -> None:
+    cfg = _lan_config()
+    headers = {"Authorization": auth} if auth else None
+    async with running_hub(cfg):
+        async with websockets.connect(f"ws://127.0.0.1:{cfg.ws_port}", additional_headers=headers) as ws:
+            with pytest.raises(ConnectionClosed) as exc:
+                await asyncio.wait_for(ws.recv(), timeout=3.0)
+        assert exc.value.rcvd is not None and exc.value.rcvd.code == 4401
+
+
+async def test_ws_query_token_still_works_but_warns(caplog: pytest.LogCaptureFixture) -> None:
+    cfg = _lan_config()
+    caplog.set_level(logging.WARNING, logger="eeg_connection_hub.hub_server")
+    async with running_hub(cfg):
+        async with websockets.connect(f"ws://127.0.0.1:{cfg.ws_port}?token={TOKEN}") as ws:
+            assert "stream_id" in await _recv_envelope(ws)
+    assert any("deprecated" in r.getMessage() and "0.2.0" in r.getMessage() for r in caplog.records)
+    assert all(TOKEN not in r.getMessage() for r in caplog.records)
+
+
+# ---------------------------------------------------------------- integration: HTTP
+
+
+@pytest.mark.parametrize("path", ["/health", "/streams"])
+async def test_http_rebinding_host_rejected(path: str) -> None:
+    cfg = _loopback_config()
+    async with running_hub(cfg):
+        status, body = await _raw_http(cfg.http_port, _get(path, host="evil.example"))
+        assert status == 403 and json.loads(body)["error"] == "forbidden host"
+        status, _ = await _raw_http(cfg.http_port, _get(path, host=None))
+        assert status == 403
+        for good in ("127.0.0.1", f"localhost:{cfg.http_port}", f"[::1]:{cfg.http_port}"):
+            status, _ = await _raw_http(cfg.http_port, _get(path, host=good))
+            assert status == 200, good
+
+
+def _repeated(path: str, name: str, values: list[str]) -> str:
+    lines = "".join(f"{name}: {value}\r\n" for value in values)
+    return f"GET {path} HTTP/1.1\r\n{lines}Connection: close\r\n\r\n"
+
+
+async def test_duplicate_host_and_origin_rejected_on_http_and_ws() -> None:
+    cfg = _loopback_config()
+    async with running_hub(cfg):
+        for path in ("/health", "/streams"):
+            request = _repeated(path, "Host", ["127.0.0.1", "evil.example"])
+            status, body = await _raw_http(cfg.http_port, request)
+            assert status == 400 and json.loads(body)["error"] == "duplicate host"
+            origin_req = (
+                f"GET {path} HTTP/1.1\r\n"
+                "Host: 127.0.0.1\r\n"
+                "Origin: http://localhost\r\n"
+                "Origin: https://evil.example\r\n"
+                "Connection: close\r\n\r\n"
+            )
+            status, body = await _raw_http(cfg.http_port, origin_req)
+            assert status == 400 and json.loads(body)["error"] == "duplicate origin", path
+        key = base64.b64encode(os.urandom(16)).decode()
+        host_dup = (
+            "GET / HTTP/1.1\r\n"
+            f"Host: 127.0.0.1:{cfg.ws_port}\r\n"
+            "Host: evil.example\r\n"
+            "Upgrade: websocket\r\n"
+            "Connection: Upgrade\r\n"
+            f"Sec-WebSocket-Key: {key}\r\n"
+            "Sec-WebSocket-Version: 13\r\n\r\n"
+        )
+        status, body = await _raw_http(cfg.ws_port, host_dup)
+        assert status == 400 and b"duplicate host" in body
+        key = base64.b64encode(os.urandom(16)).decode()
+        origin_dup = (
+            "GET / HTTP/1.1\r\n"
+            f"Host: 127.0.0.1:{cfg.ws_port}\r\n"
+            "Origin: http://127.0.0.1\r\n"
+            "Origin: https://evil.example\r\n"
+            "Upgrade: websocket\r\n"
+            "Connection: Upgrade\r\n"
+            f"Sec-WebSocket-Key: {key}\r\n"
+            "Sec-WebSocket-Version: 13\r\n\r\n"
+        )
+        status, body = await _raw_http(cfg.ws_port, origin_dup)
+        assert status == 400 and b"duplicate origin" in body
+
+
+async def test_http_foreign_origin_rejected() -> None:
+    cfg = _loopback_config()
+    async with running_hub(cfg):
+        status, _ = await _raw_http(cfg.http_port, _get("/health", extra="Origin: https://evil.example\r\n"))
+        assert status == 403
+        status, _ = await _raw_http(cfg.http_port, _get("/health", extra="Origin: http://localhost:3000\r\n"))
+        assert status == 200
+
+
+async def test_http_token_header_and_401() -> None:
+    cfg = _lan_config()
+    async with running_hub(cfg):
+        status, _ = await _raw_http(cfg.http_port, _get("/health"))
+        assert status == 401
+        status, _ = await _raw_http(cfg.http_port, _get("/health", extra="Authorization: Bearer nope\r\n"))
+        assert status == 401
+        ok = f"Authorization: Bearer {TOKEN}\r\n"
+        status, body = await _raw_http(cfg.http_port, _get("/health", extra=ok))
+        assert status == 200 and json.loads(body)["auth_required"] is True
+        status, _ = await _raw_http(cfg.http_port, _get(f"/streams?token={TOKEN}"))
+        assert status == 200  # deprecated query token still accepted
+        status, _ = await _raw_http(cfg.http_port, _get("/health", host="evil.example", extra=ok))
+        assert status == 403  # Host check applies even with a valid token
+
+
+# ---------------------------------------------------------------- token absent from verbose logs
+
+
+async def test_token_absent_from_verbose_logs() -> None:
+    """Run with the CLI's redaction installed and websockets DEBUG logging, like `eeg-hub -v`."""
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+    root = logging.getLogger()
+    old_level = root.level
+    root.addHandler(handler)
+    root.setLevel(logging.DEBUG)
+    try:
+        cfg = _lan_config()
+        cli.install_log_redaction([cfg.access_token])
+        async with running_hub(cfg):
+            uri = f"ws://127.0.0.1:{cfg.ws_port}"
+            async with websockets.connect(f"{uri}?token={TOKEN}") as ws:
+                await _recv_envelope(ws)
+            async with websockets.connect(uri, additional_headers={"Authorization": f"Bearer {TOKEN}"}) as ws:
+                await _recv_envelope(ws)
+            await _raw_http(cfg.http_port, _get(f"/health?token={TOKEN}"))
+    finally:
+        root.removeHandler(handler)
+        root.setLevel(old_level)
+        for h in root.handlers:
+            h.filters = [f for f in h.filters if not isinstance(f, RedactingFilter)]
+    text = stream.getvalue()
+    assert "websockets" in text  # debug logs were actually produced
+    assert "token=***" in text
+    assert TOKEN not in text
+
+
+async def test_ws_control_byte_authorization_traceback_is_redacted() -> None:
+    """A stray control byte in Authorization makes websockets raise ValueError(header).
+
+    Under ``-v`` that exception is logged with ``exc_info``. The token must not
+    appear in the traceback.
+    """
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+    root = logging.getLogger()
+    old_level = root.level
+    root.addHandler(handler)
+    root.setLevel(logging.DEBUG)
+    try:
+        cfg = _lan_config()
+        cli.install_log_redaction([cfg.access_token])
+        async with running_hub(cfg):
+            key = base64.b64encode(os.urandom(16)).decode()
+            request = (
+                "GET / HTTP/1.1\r\n"
+                f"Host: 127.0.0.1:{cfg.ws_port}\r\n"
+                f"Authorization: Bearer {TOKEN}\x01\r\n"
+                "Upgrade: websocket\r\n"
+                "Connection: Upgrade\r\n"
+                f"Sec-WebSocket-Key: {key}\r\n"
+                "Sec-WebSocket-Version: 13\r\n"
+                "\r\n"
+            )
+            reader, writer = await asyncio.open_connection("127.0.0.1", cfg.ws_port)
+            writer.write(request.encode("latin-1"))
+            await writer.drain()
+            await asyncio.wait_for(reader.read(4096), timeout=3.0)
+            writer.close()
+    finally:
+        root.removeHandler(handler)
+        root.setLevel(old_level)
+        for log_handler in root.handlers:
+            log_handler.filters = [flt for flt in log_handler.filters if not isinstance(flt, RedactingFilter)]
+    text = stream.getvalue()
+    assert "invalid HTTP header value" in text
+    assert "Traceback" in text
+    assert "***" in text
+    assert TOKEN not in text

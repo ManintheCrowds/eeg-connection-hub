@@ -1,0 +1,48 @@
+$ py3.10 -m pytest -q   # Python 3.10.22
+53 passed in 1.87s
+$ py3.11 -m pytest -q   # Python 3.11.17
+53 passed in 1.88s
+$ py3.12 -m pytest -q   # Python 3.12.16
+53 passed in 1.85s
+$ py3.13 -m pytest -q   # Python 3.13.5
+53 passed in 1.88s
+$ ruff check .   # ruff 0.17.6
+All checks passed!
+$ gitleaks git --redact .   # local, v8.30.1
+no leaks found
+$ pytest -v tests/test_security.py (py3.13)
+tests/test_security.py::test_parse_host_header[localhost-localhost] PASSED [  2%]
+tests/test_security.py::test_parse_host_header[LOCALHOST:8766-localhost] PASSED [  5%]
+tests/test_security.py::test_parse_host_header[127.0.0.1:1-127.0.0.1] PASSED [  8%]
+tests/test_security.py::test_parse_host_header[[::1]:8765-::1] PASSED    [ 11%]
+tests/test_security.py::test_parse_host_header[[::1]-::1] PASSED         [ 14%]
+tests/test_security.py::test_parse_host_header[evil.example-evil.example] PASSED [ 17%]
+tests/test_security.py::test_parse_host_header[::1-None] PASSED          [ 20%]
+tests/test_security.py::test_parse_host_header[localhost:abc-None] PASSED [ 23%]
+tests/test_security.py::test_parse_host_header[a b-None] PASSED          [ 26%]
+tests/test_security.py::test_parse_host_header[-None] PASSED             [ 29%]
+tests/test_security.py::test_parse_host_header[None-None] PASSED         [ 32%]
+tests/test_security.py::test_host_allowed_loopback_mode PASSED           [ 35%]
+tests/test_security.py::test_host_allowed_lan_mode_and_extra_hosts PASSED [ 38%]
+tests/test_security.py::test_origin_policy PASSED                        [ 41%]
+tests/test_security.py::test_token_extraction_prefers_bearer PASSED      [ 44%]
+tests/test_security.py::test_redact_helpers PASSED                       [ 47%]
+tests/test_security.py::test_redacting_filter_scrubs_args PASSED         [ 50%]
+tests/test_security.py::test_config_rejects_non_loopback_without_allow_lan PASSED [ 52%]
+tests/test_security.py::test_cli_bind_all_without_allow_lan_exits PASSED [ 55%]
+tests/test_security.py::test_cli_subprocess_exit_code PASSED             [ 58%]
+tests/test_security.py::test_ws_foreign_origin_rejected PASSED           [ 61%]
+tests/test_security.py::test_ws_loopback_origin_allowed PASSED           [ 64%]
+tests/test_security.py::test_ws_no_origin_allowed PASSED                 [ 67%]
+tests/test_security.py::test_ws_allow_origin_flag_extends_list PASSED    [ 70%]
+tests/test_security.py::test_ws_rebinding_host_rejected PASSED           [ 73%]
+tests/test_security.py::test_ws_bearer_header_accepted PASSED            [ 76%]
+tests/test_security.py::test_ws_missing_or_wrong_token_closes_4401[None] PASSED [ 79%]
+tests/test_security.py::test_ws_missing_or_wrong_token_closes_4401[Bearer wrong-token] PASSED [ 82%]
+tests/test_security.py::test_ws_query_token_still_works_but_warns PASSED [ 85%]
+tests/test_security.py::test_http_rebinding_host_rejected[/health] PASSED [ 88%]
+tests/test_security.py::test_http_rebinding_host_rejected[/streams] PASSED [ 91%]
+tests/test_security.py::test_http_foreign_origin_rejected PASSED         [ 94%]
+tests/test_security.py::test_http_token_header_and_401 PASSED            [ 97%]
+tests/test_security.py::test_token_absent_from_verbose_logs PASSED       [100%]
+============================== 34 passed in 1.06s ==============================

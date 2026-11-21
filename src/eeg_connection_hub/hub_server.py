@@ -13,6 +13,7 @@ import time
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from http import HTTPStatus
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
@@ -23,6 +24,7 @@ from eeg_connection_hub.config import HubConfig
 from eeg_connection_hub.features import features_from_buffer, synth_features, warming_features
 from eeg_connection_hub.lsl_discovery import DiscoveredStream, discover_muse_eeg_streams
 from eeg_connection_hub.schemas import build_envelope, validate_envelope
+from eeg_connection_hub.security import extract_token, front_door_decision, header_values
 from eeg_connection_hub.stream_mapping import (
     LiveStreamConfig,
     build_channel_mapping,
@@ -43,6 +45,19 @@ def _ws_path_and_query(websocket: Any) -> tuple[str, dict[str, list[str]]]:
         raw_path = websocket.path
     parsed = urlparse(raw_path)
     return parsed.path, parse_qs(parsed.query)
+
+
+def _ws_header_getter(websocket: Any) -> Callable[[str], str | None]:
+    """Header lookup across websockets' new asyncio API and the legacy API (websockets 12)."""
+    headers: Any = None
+    request = getattr(websocket, "request", None)
+    if request is not None and hasattr(request, "headers"):
+        headers = request.headers
+    elif hasattr(websocket, "request_headers"):
+        headers = websocket.request_headers
+    if headers is None:
+        return lambda _name: None
+    return lambda name: headers.get(name)
 
 
 @dataclass(eq=False)
@@ -83,6 +98,7 @@ class EEGConnectionHub:
         self.subscribers: list[Subscriber] = []
         self.workers: dict[str, StreamWorker] = {}
         self._started_at = time.time()
+        self._query_token_warned = False
         self._resolve_streams = resolve_streams
         self._local_clock = local_clock or time.time
         self._t0 = time.time()
@@ -354,9 +370,46 @@ class EEGConnectionHub:
             messages.append(json.dumps(worker.latest))
         return messages
 
+    def _warn_query_token(self, where: str) -> None:
+        if not self._query_token_warned:
+            self._query_token_warned = True
+            logger.warning(
+                "%s client sent the access token in the URL query (?token=); this is deprecated "
+                "and will be removed in 0.2.0. It leaks into logs and history — "
+                "use the 'Authorization: Bearer <token>' header",
+                where,
+            )
+
+    def _front_door(self, headers: Any) -> tuple[HTTPStatus, str] | None:
+        return front_door_decision(
+            self.config,
+            header_values(headers, "Host"),
+            header_values(headers, "Origin"),
+        )
+
+    def process_request_new(self, connection: Any, request: Any) -> Any:
+        """websockets>=13 asyncio hook: duplicate Host/Origin is 400, disallowed is 403."""
+        decision = self._front_door(request.headers)
+        if decision is None:
+            return None
+        status, reason = decision
+        logger.info("rejected WebSocket handshake: %s", reason)
+        return connection.respond(status, f"{reason}\n")
+
+    def process_request_legacy(self, path: str, request_headers: Any) -> Any:
+        """websockets 12 hook: same 400/403 decisions as :meth:`process_request_new`."""
+        decision = self._front_door(request_headers)
+        if decision is None:
+            return None
+        status, reason = decision
+        logger.info("rejected WebSocket handshake: %s", reason)
+        return (status, [("Content-Type", "text/plain")], f"{reason}\n".encode())
+
     async def ws_handler(self, websocket: Any) -> None:
         _, query = _ws_path_and_query(websocket)
-        token = (query.get("token") or [None])[0]
+        token, via_query = extract_token(_ws_header_getter(websocket), query)
+        if via_query and token_required(self.config):
+            self._warn_query_token("WebSocket")
         if not validate_token(self.config, token):
             await websocket.close(code=4401, reason="unauthorized")
             return
@@ -389,15 +442,40 @@ class EEGConnectionHub:
             parts = request_line.split()
             method = parts[0] if parts else "GET"
             path = parts[1] if len(parts) > 1 else "/"
-            # Drain headers
-            while True:
+            collected: dict[str, list[str]] = {}
+            for _ in range(100):
                 line = await reader.readline()
                 if line in (b"\r\n", b"\n", b""):
                     break
+                name, sep, value = line.decode("latin-1").partition(":")
+                if sep:
+                    collected.setdefault(name.strip().lower(), []).append(value.strip())
+
+            decision = front_door_decision(
+                self.config,
+                collected.get("host", []),
+                collected.get("origin", []),
+            )
+            if decision is not None:
+                status, reason = decision
+                logger.info("rejected HTTP request: %s", reason)
+                body = json.dumps({"error": reason}).encode("utf-8")
+                writer.write(
+                    f"HTTP/1.1 {int(status)} {status.phrase}\r\nContent-Type: application/json\r\n".encode()
+                )
+                writer.write(f"Content-Length: {len(body)}\r\n\r\n".encode())
+                writer.write(body)
+                await writer.drain()
+                writer.close()
+                return
+
+            headers = {name: values[0] for name, values in collected.items() if values}
 
             parsed = urlparse(path)
             query = parse_qs(parsed.query)
-            token = (query.get("token") or [None])[0]
+            token, via_query = extract_token(lambda name: headers.get(name.lower()), query)
+            if via_query and token_required(self.config):
+                self._warn_query_token("HTTP")
             if not validate_token(self.config, token):
                 body = json.dumps({"error": "unauthorized"}).encode("utf-8")
                 writer.write(b"HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\n")
@@ -445,15 +523,22 @@ class EEGConnectionHub:
     async def run(self) -> None:
         try:
             serve = importlib.import_module("websockets.asyncio.server").serve
+            process_request: Callable[..., Any] = self.process_request_new
         except ImportError:
             serve = importlib.import_module("websockets.server").serve
+            process_request = self.process_request_legacy
 
         http_server = await asyncio.start_server(
             self.http_handler,
             self.config.host,
             self.config.http_port,
         )
-        async with serve(self.ws_handler, self.config.host, self.config.ws_port):
+        async with serve(
+            self.ws_handler,
+            self.config.host,
+            self.config.ws_port,
+            process_request=process_request,
+        ):
             async with http_server:
                 logger.info(
                     "eeg-connection-hub ws://%s:%s http://%s:%s synth=%s",

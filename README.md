@@ -57,12 +57,15 @@ Often fed by [BlueMuse](https://github.com/kowalej/BlueMuse) (or muselsl / any M
 
 ## Configuration highlights
 
-Local-first by default: loopback bind, no phone-home (see [PRIVACY.md](PRIVACY.md)). LAN bind requires an explicit flag plus access token.
+Local-first by default: loopback bind, no phone-home (see [PRIVACY.md](PRIVACY.md)). LAN bind requires an explicit flag plus access token. Browser-facing hardening: foreign `Origin`s and unexpected `Host` headers (DNS rebinding) get HTTP 403 on both the WebSocket handshake and `/health`/`/streams`. A repeated `Host` or `Origin` is HTTP 400 on those same doors. `--allow-origin null` is refused at startup. Tokens are redacted from `-v` logs. See [SECURITY.md](SECURITY.md).
 
 | Flag | Default | Meaning |
 |------|---------|---------|
-| `--host` | `127.0.0.1` | Loopback bind |
-| `--allow-lan` | off | Bind `0.0.0.0`; requires `--access-token` (auto-generated if omitted) |
+| `--host` | `127.0.0.1` | Loopback bind; a non-loopback value without `--allow-lan` is a startup error |
+| `--allow-lan` | off | Bind `0.0.0.0` (or `--host`); requires an access token (auto-generated into a 0600 state file if omitted; only the path is printed) |
+| `--access-token` | `$EEG_HUB_ACCESS_TOKEN` | LAN token, at least 32 characters; clients send `Authorization: Bearer <token>` (`?token=` is deprecated and will be removed in 0.2.0) |
+| `--allow-origin ORIGIN` | — | Extra browser Origin allowed (repeatable). `null` is rejected at startup. No-Origin clients and `http(s)://localhost`/`127.0.0.1`/`[::1]` (any port) always pass |
+| `--allow-host NAME` | — | Extra `Host` header name accepted, e.g. `labpc.local` (repeatable; DNS-rebinding guard) |
 | `--enable-raw-eeg` | off | Attach clipped raw window in envelope; loopback only; never logged |
 | `--synth N` | `0` | Use N synthetic Muse streams (no hardware) |
 

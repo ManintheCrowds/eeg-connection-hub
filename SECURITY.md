@@ -13,12 +13,26 @@ Local lab / LAN collaboration tool. **Not** hardened for internet exposure.
 
 Requires **both**:
 
-1. `--allow-lan` (binds `0.0.0.0`)
-2. `--access-token <secret>` (auto-generated if omitted)
+1. `--allow-lan` (binds `0.0.0.0`, or the given `--host`)
+2. An access token: `--access-token <secret>` or `$EEG_HUB_ACCESS_TOKEN` (preferred: keeps it out of `ps`). An operator-supplied token must be at least 32 characters; a shorter value is a startup error (exit 2). If omitted, one is auto-generated with `secrets.token_urlsafe(32)` (43 characters) and written to a mode-0600 file at `$XDG_STATE_HOME/eeg-connection-hub/access-token` (default `~/.local/state/eeg-connection-hub/access-token`; directory mode 0700). Startup prints only that path. The token is not written to stderr, so journald, Docker logs, and CI do not capture it. A token you pass yourself is never printed and is not written to that file. If the file cannot be created, startup exits 2 and still does not print the token.
 
-Clients must pass `?token=` on WebSocket URLs and HTTP requests.
+A non-loopback `--host` (e.g. `0.0.0.0`) without `--allow-lan` is a startup error (exit 2).
+
+Clients send `Authorization: Bearer <token>` on the WebSocket handshake and HTTP requests. The old `?token=` query parameter still works but is **deprecated and will be removed in 0.2.0** (URLs end up in logs, shell history, and proxies); the hub logs a one-time warning when it is used.
 
 Unauthorized clients receive HTTP 401 or WebSocket close `4401`.
+
+## Browser protections (Origin / Host)
+
+A web page in the user's browser can try to reach a local hub. Two checks run before auth on both the WebSocket handshake and HTTP (`/health`, `/streams`); failures get HTTP 403:
+
+- **Origin allowlist** — requests with no `Origin` (curl, Python, native apps) and loopback origins (`http(s)://localhost`, `127.0.0.1`, `[::1]`, any port) are allowed. Anything else, including the opaque origin `null`, is rejected. `--allow-origin null` is a startup error: that origin cannot be allowlisted.
+- **Host check (DNS rebinding)** — loopback mode accepts only `localhost`, `127.0.0.1`, `[::1]` (any port). LAN mode also accepts the bound address, any IP literal (rebinding requires a DNS name), and names given with `--allow-host` (e.g. `labpc.local`). Requests without a `Host` header are rejected.
+- **Duplicate Host or Origin** — more than one `Host` or `Origin` is HTTP 400 on HTTP and on both WebSocket hooks (the asyncio hook and the legacy websockets 12 hook). HTTP does not keep the first value, and the WebSocket hooks do not turn the duplicate into HTTP 500. A disallowed single value is still HTTP 403.
+
+## Log redaction
+
+Access tokens are scrubbed (`token=***`, `Bearer ***`, and the literal token value) from every log record, including websockets' handshake debug lines under `-v`. The same filter cleans `exc_info`, `exc_text`, and `stack_info`, so a malformed header that echoes the token inside a `ValueError` traceback (for example an `Authorization` value with a stray control byte) does not land in the log. The configured token is replaced first — including percent-encoded forms, upper or lower hex, and that encoded value when it appears outside `token=` — and only then do the `token=` / `Bearer` patterns run. Characters such as `!`, `:`, and `,` used to leave a suffix in header dumps and `?token=` lines; the exact value is removed in full. The startup log line never contains the token.
 
 ## Raw EEG opt-in
 

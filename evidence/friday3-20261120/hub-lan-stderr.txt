@@ -1,0 +1,85 @@
+DEBUG asyncio: Using selector: EpollSelector
+INFO websockets.server: server listening on 0.0.0.0:28765
+INFO eeg_connection_hub.hub_server: eeg-connection-hub ws://0.0.0.0:28765 http://0.0.0.0:28766 synth=2
+WARNING eeg_connection_hub.hub_server: HTTP client sent the access token in the URL query (?token=); this is deprecated and leaks into logs/history — use the 'Authorization: Bearer <token>' header
+DEBUG websockets.server: = connection is CONNECTING
+DEBUG websockets.server: < GET / HTTP/1.1
+DEBUG websockets.server: < Host: 127.0.0.1:28765
+DEBUG websockets.server: < Upgrade: websocket
+DEBUG websockets.server: < Connection: Upgrade
+DEBUG websockets.server: < Sec-WebSocket-Key: <per-connection nonce elided>
+DEBUG websockets.server: < Sec-WebSocket-Version: 13
+DEBUG websockets.server: < Sec-WebSocket-Extensions: permessage-deflate; client_max_window_bits
+DEBUG websockets.server: < Authorization: Bearer ***
+DEBUG websockets.server: < User-Agent: Python/3.13 websockets/17.4
+DEBUG websockets.server: > HTTP/1.1 101 Switching Protocols
+DEBUG websockets.server: > Date: Fri, 20 Nov 2026 23:20:46 GMT
+DEBUG websockets.server: > Upgrade: websocket
+DEBUG websockets.server: > Connection: Upgrade
+DEBUG websockets.server: > Sec-WebSocket-Accept: <per-connection nonce elided>
+DEBUG websockets.server: > Sec-WebSocket-Extensions: permessage-deflate; server_max_window_bits=12; client_max_window_bits=12
+DEBUG websockets.server: > Server: Python/3.13 websockets/17.4
+DEBUG websockets.server: = connection is OPEN
+INFO websockets.server: connection open
+DEBUG websockets.server: > TEXT '{"hub_schema": "eeg-connection-hub.envelope/v1"...876, "pulse": 0.6907}}}' [560 bytes]
+DEBUG websockets.server: > TEXT '{"hub_schema": "eeg-connection-hub.envelope/v1"...5729, "pulse": 0.745}}}' [558 bytes]
+DEBUG websockets.server: < CLOSE 1000 (OK) [2 bytes]
+DEBUG websockets.server: > CLOSE 1000 (OK) [2 bytes]
+DEBUG websockets.server: = connection is CLOSING
+DEBUG websockets.server: > EOF
+DEBUG websockets.server: x half-closing TCP connection
+DEBUG websockets.server: = connection is CLOSED
+INFO websockets.server: connection closed
+DEBUG websockets.server: = connection is CONNECTING
+DEBUG websockets.server: < GET /?token=*** HTTP/1.1
+DEBUG websockets.server: < Host: 127.0.0.1:28765
+DEBUG websockets.server: < Upgrade: websocket
+DEBUG websockets.server: < Connection: Upgrade
+DEBUG websockets.server: < Sec-WebSocket-Key: <per-connection nonce elided>
+DEBUG websockets.server: < Sec-WebSocket-Version: 13
+DEBUG websockets.server: < Sec-WebSocket-Extensions: permessage-deflate; client_max_window_bits
+DEBUG websockets.server: < User-Agent: Python/3.13 websockets/17.4
+DEBUG websockets.server: > HTTP/1.1 101 Switching Protocols
+DEBUG websockets.server: > Date: Fri, 20 Nov 2026 23:20:46 GMT
+DEBUG websockets.server: > Upgrade: websocket
+DEBUG websockets.server: > Connection: Upgrade
+DEBUG websockets.server: > Sec-WebSocket-Accept: <per-connection nonce elided>
+DEBUG websockets.server: > Sec-WebSocket-Extensions: permessage-deflate; server_max_window_bits=12; client_max_window_bits=12
+DEBUG websockets.server: > Server: Python/3.13 websockets/17.4
+DEBUG websockets.server: = connection is OPEN
+INFO websockets.server: connection open
+DEBUG websockets.server: > TEXT '{"hub_schema": "eeg-connection-hub.envelope/v1"...876, "pulse": 0.6907}}}' [560 bytes]
+DEBUG websockets.server: > TEXT '{"hub_schema": "eeg-connection-hub.envelope/v1"...5729, "pulse": 0.745}}}' [558 bytes]
+DEBUG websockets.server: < CLOSE 1000 (OK) [2 bytes]
+DEBUG websockets.server: > CLOSE 1000 (OK) [2 bytes]
+DEBUG websockets.server: = connection is CLOSING
+DEBUG websockets.server: > EOF
+DEBUG websockets.server: x half-closing TCP connection
+DEBUG websockets.server: = connection is CLOSED
+INFO websockets.server: connection closed
+DEBUG websockets.server: = connection is CONNECTING
+DEBUG websockets.server: < GET / HTTP/1.1
+DEBUG websockets.server: < Host: 127.0.0.1:28765
+DEBUG websockets.server: < Upgrade: websocket
+DEBUG websockets.server: < Connection: Upgrade
+DEBUG websockets.server: < Sec-WebSocket-Key: <per-connection nonce elided>
+DEBUG websockets.server: < Sec-WebSocket-Version: 13
+DEBUG websockets.server: < Sec-WebSocket-Extensions: permessage-deflate; client_max_window_bits
+DEBUG websockets.server: < Authorization: Bearer ***
+DEBUG websockets.server: < User-Agent: Python/3.13 websockets/17.4
+DEBUG websockets.server: > HTTP/1.1 101 Switching Protocols
+DEBUG websockets.server: > Date: Fri, 20 Nov 2026 23:20:46 GMT
+DEBUG websockets.server: > Upgrade: websocket
+DEBUG websockets.server: > Connection: Upgrade
+DEBUG websockets.server: > Sec-WebSocket-Accept: <per-connection nonce elided>
+DEBUG websockets.server: > Sec-WebSocket-Extensions: permessage-deflate; server_max_window_bits=12; client_max_window_bits=12
+DEBUG websockets.server: > Server: Python/3.13 websockets/17.4
+DEBUG websockets.server: = connection is OPEN
+INFO websockets.server: connection open
+DEBUG websockets.server: > CLOSE 4401 (private use) unauthorized [14 bytes]
+DEBUG websockets.server: = connection is CLOSING
+DEBUG websockets.server: < CLOSE 4401 (private use) unauthorized [14 bytes]
+DEBUG websockets.server: > EOF
+DEBUG websockets.server: x half-closing TCP connection
+DEBUG websockets.server: = connection is CLOSED
+INFO websockets.server: connection closed

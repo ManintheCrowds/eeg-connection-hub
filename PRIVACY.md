@@ -8,7 +8,7 @@
 | Quality / artifact flags | Published | No raw samples |
 | Raw EEG samples | **Off** | Opt-in via `--enable-raw-eeg`; loopback only |
 | Session labels | Pseudonymous | `participant-NNN`; operator-assigned labels optional later |
-| Access tokens | LAN mode only | Printed once to stderr at startup; not logged |
+| Access tokens | LAN mode only | Auto-generated token is stored in a mode-0600 file under the XDG state directory; stderr and service logs (journald, Docker, CI) receive only the path. Operator-supplied tokens (at least 32 characters) are never printed. Redacted from all logs, including `-v` and tracebacks. |
 
 ## Logging
 

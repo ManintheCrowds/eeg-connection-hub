@@ -1,8 +1,10 @@
 # PURPOSE: LAN access token validation for WebSocket and HTTP subscribers.
-# DEPENDENCIES: none
+# DEPENDENCIES: hmac (stdlib)
 """Authentication helpers for LAN-exposed hub instances."""
 
 from __future__ import annotations
+
+import hmac
 
 from eeg_connection_hub.config import HubConfig
 
@@ -23,6 +25,4 @@ def validate_token(config: HubConfig, provided: str | None) -> bool:
 
 def secrets_compare(a: str, b: str) -> bool:
     """Constant-time string comparison."""
-    import hmac
-
     return hmac.compare_digest(a.encode("utf-8"), b.encode("utf-8"))
